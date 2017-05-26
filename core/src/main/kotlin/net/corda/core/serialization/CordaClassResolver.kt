@@ -63,13 +63,19 @@ class CordaClassResolver(val whitelist: ClassWhitelist) : DefaultClassResolver()
     }
 
     override fun registerImplicit(type: Class<*>): Registration {
-        // We have to set reference to true, since the flag influences how String fields are treated and we want it to be consistent.
-        val references = kryo.references
-        try {
-            kryo.references = true
-            return register(Registration(type, kryo.getDefaultSerializer(type), NAME.toInt()))
-        } finally {
-            kryo.references = references
+        val hasAnnotation = checkForAnnotation(type)
+        if (!hasAnnotation) {
+            // We have to set reference to true, since the flag influences how String fields are treated and we want it to be consistent.
+            val references = kryo.references
+            try {
+                kryo.references = true
+                return register(Registration(type, kryo.getDefaultSerializer(type), NAME.toInt()))
+            } finally {
+                kryo.references = references
+            }
+        } else {
+            // Build AMQP serializer
+            return register(Registration(type, KryoAMQPSerializer, NAME.toInt()))
         }
     }
 
@@ -80,13 +86,13 @@ class CordaClassResolver(val whitelist: ClassWhitelist) : DefaultClassResolver()
         return (type.classLoader !is AttachmentsClassLoader)
                 && !KryoSerializable::class.java.isAssignableFrom(type)
                 && !type.isAnnotationPresent(DefaultSerializer::class.java)
-                && (type.isAnnotationPresent(CordaSerializable::class.java) || hasAnnotationOnInterface(type))
+                && (type.isAnnotationPresent(CordaSerializable::class.java) || hasInheritedAnnotation(type))
     }
 
     // Recursively check interfaces for our annotation.
-    private fun hasAnnotationOnInterface(type: Class<*>): Boolean {
-        return type.interfaces.any { it.isAnnotationPresent(CordaSerializable::class.java) || hasAnnotationOnInterface(it) }
-                || (type.superclass != null && hasAnnotationOnInterface(type.superclass))
+    private fun hasInheritedAnnotation(type: Class<*>): Boolean {
+        return type.interfaces.any { it.isAnnotationPresent(CordaSerializable::class.java) || hasInheritedAnnotation(it) }
+                || (type.superclass != null && hasInheritedAnnotation(type.superclass))
     }
 
     // Need to clear out class names from attachments.

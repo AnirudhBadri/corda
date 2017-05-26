@@ -7,7 +7,7 @@ import org.apache.qpid.proton.codec.Data
 import java.lang.reflect.Type
 import java.security.PublicKey
 
-class PublicKeySerializer : CustomSerializer.Implements<PublicKey>(PublicKey::class.java) {
+object PublicKeySerializer : CustomSerializer.Implements<PublicKey>(PublicKey::class.java) {
     override val additionalSerializers: Iterable<CustomSerializer<out Any>> = emptyList()
 
     override val schemaForDocumentation = Schema(listOf(RestrictedType(type.toString(), "", listOf(type.toString()), SerializerFactory.primitiveTypeName(Binary::class.java)!!, descriptor, emptyList())))

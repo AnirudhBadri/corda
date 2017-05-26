@@ -102,4 +102,27 @@ abstract class CustomSerializer<T> : AMQPSerializer<T> {
             return fromProxy(proxy)
         }
     }
+
+    abstract class ToString<T>(clazz: Class<T>, withInheritance: Boolean = false,
+                               private val maker: (String) -> T = clazz.getConstructor(String::class.java).let { `constructor` -> { string -> `constructor`.newInstance(string) } },
+                               private val unmaker: (T) -> String = { obj -> obj.toString() }) : Proxy<T, String>(clazz, String::class.java, /* Unused */ SerializerFactory(), withInheritance) {
+
+        override val additionalSerializers: Iterable<CustomSerializer<out Any>> = emptyList()
+
+        override val schemaForDocumentation = Schema(listOf(RestrictedType(type.toString(), "", listOf(type.toString()), SerializerFactory.primitiveTypeName(String::class.java)!!, descriptor, emptyList())))
+
+        override fun toProxy(obj: T): String = unmaker(obj)
+
+        override fun fromProxy(proxy: String): T = maker(proxy)
+
+        override fun writeDescribedObject(obj: T, data: Data, type: Type, output: SerializationOutput) {
+            val proxy = toProxy(obj)
+            data.putObject(proxy)
+        }
+
+        override fun readObject(obj: Any, schema: Schema, input: DeserializationInput): T {
+            val proxy = input.readObject(obj, schema, String::class.java) as String
+            return fromProxy(proxy)
+        }
+    }
 }

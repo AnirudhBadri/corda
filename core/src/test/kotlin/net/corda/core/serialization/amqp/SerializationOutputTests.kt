@@ -197,7 +197,7 @@ class SerializationOutputTests {
         serdes(obj)
     }
 
-    @Test(expected = NotSerializableException::class)
+    @Test
     fun `test generic foo`() {
         val obj = GenericFoo("Fred", "Ginger")
         serdes(obj)
@@ -246,9 +246,9 @@ class SerializationOutputTests {
     @Test
     fun `test custom serializers on public key`() {
         val factory = SerializerFactory()
-        factory.register(net.corda.core.serialization.amqp.custom.PublicKeySerializer())
+        factory.register(net.corda.core.serialization.amqp.custom.PublicKeySerializer)
         val factory2 = SerializerFactory()
-        factory2.register(net.corda.core.serialization.amqp.custom.PublicKeySerializer())
+        factory2.register(net.corda.core.serialization.amqp.custom.PublicKeySerializer)
         val obj = MEGA_CORP_PUBKEY
         serdes(obj, factory, factory2)
     }

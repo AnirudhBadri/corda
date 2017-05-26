@@ -46,7 +46,8 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
      * restricted type processing).
      */
     @Throws(NotSerializableException::class)
-    fun get(actualType: Class<*>?, declaredType: Type): AMQPSerializer<out Any> {
+    fun get(actualType: Class<*>?, denormalisedDeclaredType: Type): AMQPSerializer<out Any> {
+        val declaredType = normaliseType(denormalisedDeclaredType)
         if (declaredType is ParameterizedType) {
             return serializersByType.computeIfAbsent(declaredType) {
                 // We allow only Collection and Map.
