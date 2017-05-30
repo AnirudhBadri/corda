@@ -343,12 +343,17 @@ private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, 
                     // Need to check if a custom serializer is applicable
                     val customSerializer = factory.findCustomSerializer(type)
                     if (customSerializer == null) {
-                        // Hash the class + properties + interfaces
-                        propertiesForSerialization(constructorForDeserialization(type), type, factory).fold(hasher.putUnencodedChars(type.name)) { orig, param ->
-                            fingerprintForType(param.readMethod.genericReturnType, alreadySeen, orig, factory).putUnencodedChars(param.name).putUnencodedChars(if (param.mandatory) NOT_NULLABLE_HASH else NULLABLE_HASH)
+                        if (type.kotlin.objectInstance != null) {
+                            // TODO: name collision is too likely for kotlin objects
+                            hasher.putUnencodedChars(type.name)
+                        } else {
+                            // Hash the class + properties + interfaces
+                            propertiesForSerialization(constructorForDeserialization(type), type, factory).fold(hasher.putUnencodedChars(type.name)) { orig, param ->
+                                fingerprintForType(param.readMethod.genericReturnType, alreadySeen, orig, factory).putUnencodedChars(param.name).putUnencodedChars(if (param.mandatory) NOT_NULLABLE_HASH else NULLABLE_HASH)
+                            }
+                            interfacesForSerialization(type).map { fingerprintForType(it, alreadySeen, hasher, factory) }
+                            hasher
                         }
-                        interfacesForSerialization(type).map { fingerprintForType(it, alreadySeen, hasher, factory) }
-                        hasher
                     } else {
                         hasher.putUnencodedChars(customSerializer.typeDescriptor)
                     }

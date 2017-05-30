@@ -53,13 +53,14 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 // We allow only Collection and Map.
                 val rawType = declaredType.rawType
                 if (rawType is Class<*>) {
-                    checkParameterisedTypesConcrete(declaredType.actualTypeArguments)
+                    //checkParameterisedTypesConcrete(declaredType.actualTypeArguments)
                     if (Collection::class.java.isAssignableFrom(rawType)) {
                         CollectionSerializer(declaredType, this)
                     } else if (Map::class.java.isAssignableFrom(rawType)) {
                         makeMapSerializer(declaredType)
                     } else {
-                        throw NotSerializableException("Declared types of $declaredType are not supported.")
+                        //throw NotSerializableException("Declared types of $declaredType are not supported.")
+                        makeGenericClassSerializer(declaredType)
                     }
                 } else {
                     throw NotSerializableException("Declared types of $declaredType are not supported.")
@@ -172,12 +173,24 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                     if (clazz.isArray) {
                         whitelisted(clazz.componentType)
                         ArraySerializer(clazz, this)
+                    } else if (clazz.kotlin.objectInstance != null) {
+                        SingletonSerializer(clazz, clazz.kotlin.objectInstance!!, this)
                     } else {
                         whitelisted(clazz)
                         ObjectSerializer(clazz, this)
                     }
                 }()
             }
+        }
+    }
+
+    private fun makeGenericClassSerializer(type: ParameterizedType): AMQPSerializer<out Any> {
+        return if (type is GenericArrayType) {
+            whitelisted(type.genericComponentType)
+            ArraySerializer(type, this)
+        } else {
+            whitelisted(type)
+            ObjectSerializer(type, this)
         }
     }
 
@@ -190,13 +203,19 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         return null
     }
 
-    private fun whitelisted(clazz: Class<*>): Boolean {
-        if (whitelist.hasListed(clazz) || hasAnnotationInHierarchy(clazz)) {
-            return true
+    private fun whitelisted(type: Type): Boolean {
+        if (type is Class<*>) {
+            if (whitelist.hasListed(type) || hasAnnotationInHierarchy(type)) {
+                return true
+            } else {
+                throw NotSerializableException("Class $type is not on the whitelist or annotated with @CordaSerializable.")
+            }
         } else {
-            throw NotSerializableException("Class $clazz is not on the whitelist or annotated with @CordaSerializable.")
+            //TODO("whitelist checking of generics")
+            return whitelisted(concreteClass(type))
         }
     }
+
 
     // Recursively check the class, interfaces and superclasses for our annotation.
     internal fun hasAnnotationInHierarchy(type: Class<*>): Boolean {
@@ -212,9 +231,12 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     }
 
     companion object {
-        fun isPrimitive(type: Type): Boolean = type is Class<*> && Primitives.wrap(type) in primitiveTypeNames
+        fun isPrimitive(type: Type): Boolean = primitiveTypeName(type) != null
 
-        fun primitiveTypeName(type: Type): String? = primitiveTypeNames[type as? Class<*>]
+        fun primitiveTypeName(type: Type): String? {
+            val clazz = type as? Class<*> ?: return null
+            return primitiveTypeNames[Primitives.unwrap(clazz)]
+        }
 
         private val primitiveTypeNames: Map<Class<*>, String> = mapOf(
                 Boolean::class.java to "boolean",
@@ -222,7 +244,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 UnsignedByte::class.java to "ubyte",
                 Short::class.java to "short",
                 UnsignedShort::class.java to "ushort",
-                Integer::class.java to "int",
+                Int::class.java to "int",
                 UnsignedInteger::class.java to "uint",
                 Long::class.java to "long",
                 UnsignedLong::class.java to "ulong",
@@ -234,7 +256,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 Char::class.java to "char",
                 Date::class.java to "timestamp",
                 UUID::class.java to "uuid",
-                Binary::class.java to "binary",
+                ByteArray::class.java to "binary",
                 String::class.java to "string",
                 Symbol::class.java to "symbol")
     }

@@ -22,6 +22,16 @@ import kotlin.reflect.jvm.javaType
 @Retention(AnnotationRetention.RUNTIME)
 annotation class ConstructorForDeserialization
 
+internal fun concreteClass(type: Type): Class<*> {
+    if (type is Class<*>) {
+        return type
+    } else if (type is ParameterizedType) {
+        return concreteClass(type.rawType)
+    } else {
+        throw NotSerializableException("Expected either a Class or ParameterizedType but is $type")
+    }
+}
+
 /**
  * Code for finding the constructor we will use for deserialization.
  *
@@ -29,9 +39,10 @@ annotation class ConstructorForDeserialization
  * Otherwise it starts with the primary constructor in kotlin, if there is one, and then will override this with any that is
  * annotated with [@CordaConstructor].  It will report an error if more than one constructor is annotated.
  */
-internal fun <T : Any> constructorForDeserialization(clazz: Class<T>): KFunction<T>? {
+internal fun constructorForDeserialization(type: Type): KFunction<Any>? {
+    val clazz: Class<*> = concreteClass(type)
     if (isConcrete(clazz)) {
-        var preferredCandidate: KFunction<T>? = clazz.kotlin.primaryConstructor
+        var preferredCandidate: KFunction<Any>? = clazz.kotlin.primaryConstructor
         var annotatedCount = 0
         val kotlinConstructors = clazz.kotlin.constructors
         val hasDefault = kotlinConstructors.any { it.parameters.isEmpty() }
@@ -60,7 +71,8 @@ internal fun <T : Any> constructorForDeserialization(clazz: Class<T>): KFunction
  * Note, you will need any Java classes to be compiled with the `-parameters` option to ensure constructor parameters have
  * names accessible via reflection.
  */
-internal fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>?, clazz: Class<*>, factory: SerializerFactory): Collection<PropertySerializer> {
+internal fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>?, type: Type, factory: SerializerFactory): Collection<PropertySerializer> {
+    val clazz = concreteClass(type)
     return if (kotlinConstructor != null) propertiesForSerialization(kotlinConstructor, factory) else propertiesForSerialization(clazz, factory)
 }
 
@@ -79,7 +91,7 @@ private fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>
         val getter = matchingProperty.readMethod ?: throw NotSerializableException("Property has no getter method for $name of $clazz." +
                 " If using Java and the parameter name looks anonymous, check that you have the -parameters option specified in the Java compiler.")
         if (constructorParamTakesReturnTypeOfGetter(getter, param)) {
-            rc += PropertySerializer.make(name, getter, factory)
+            rc += PropertySerializer.make(name, getter, getter.genericReturnType, factory)
         } else {
             throw NotSerializableException("Property type ${getter.genericReturnType} for $name of $clazz differs from constructor parameter type ${param.type.javaType}")
         }
@@ -96,12 +108,12 @@ private fun propertiesForSerialization(clazz: Class<*>, factory: SerializerFacto
     for (property in properties) {
         // Check that the method has a getter in java.
         val getter = property.readMethod ?: throw NotSerializableException("Property has no getter method for ${property.name} of $clazz.")
-        rc += PropertySerializer.make(property.name, getter, factory)
+        rc += PropertySerializer.make(property.name, getter, getter.genericReturnType, factory)
     }
     return rc
 }
 
-internal fun interfacesForSerialization(clazz: Class<*>): List<Type> {
+internal fun interfacesForSerialization(clazz: Type): List<Type> {
     val interfaces = LinkedHashSet<Type>()
     exploreType(clazz, interfaces)
     return interfaces.toList()

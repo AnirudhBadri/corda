@@ -1,7 +1,9 @@
 package net.corda.core.serialization.amqp
 
+import org.apache.qpid.proton.amqp.Binary
 import org.apache.qpid.proton.codec.Data
 import java.lang.reflect.Method
+import java.lang.reflect.Type
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.javaGetter
 
@@ -54,13 +56,13 @@ sealed class PropertySerializer(val name: String, val readMethod: Method) {
     }
 
     companion object {
-        fun make(name: String, readMethod: Method, factory: SerializerFactory): PropertySerializer {
-            val type = readMethod.genericReturnType
-            if (SerializerFactory.isPrimitive(type)) {
+        fun make(name: String, readMethod: Method, resolvedType: Type, factory: SerializerFactory): PropertySerializer {
+            //val type = readMethod.genericReturnType
+            if (SerializerFactory.isPrimitive(resolvedType)) {
                 // This is a little inefficient for performance since it does a runtime check of type.  We could do build time check with lots of subclasses here.
                 return AMQPPrimitivePropertySerializer(name, readMethod)
             } else {
-                return DescribedTypePropertySerializer(name, readMethod) { factory.get(null, type) }
+                return DescribedTypePropertySerializer(name, readMethod, resolvedType) { factory.get(null, resolvedType) }
             }
         }
     }
@@ -68,7 +70,7 @@ sealed class PropertySerializer(val name: String, val readMethod: Method) {
     /**
      * A property serializer for a complex type (another object).
      */
-    class DescribedTypePropertySerializer(name: String, readMethod: Method, private val lazyTypeSerializer: () -> AMQPSerializer<out Any>) : PropertySerializer(name, readMethod) {
+    class DescribedTypePropertySerializer(name: String, readMethod: Method, private val resolvedType: Type, private val lazyTypeSerializer: () -> AMQPSerializer<out Any>) : PropertySerializer(name, readMethod) {
         // This is lazy so we don't get an infinite loop when a method returns an instance of the class.
         private val typeSerializer: AMQPSerializer<out Any> by lazy { lazyTypeSerializer() }
 
@@ -77,11 +79,11 @@ sealed class PropertySerializer(val name: String, val readMethod: Method) {
         }
 
         override fun readProperty(obj: Any?, schema: Schema, input: DeserializationInput): Any? {
-            return input.readObjectOrNull(obj, schema, readMethod.genericReturnType)
+            return input.readObjectOrNull(obj, schema, resolvedType)
         }
 
         override fun writeProperty(obj: Any?, data: Data, output: SerializationOutput) {
-            output.writeObjectOrNull(readMethod.invoke(obj), data, readMethod.genericReturnType)
+            output.writeObjectOrNull(readMethod.invoke(obj), data, resolvedType)
         }
     }
 
@@ -89,14 +91,20 @@ sealed class PropertySerializer(val name: String, val readMethod: Method) {
      * A property serializer for an AMQP primitive type (Int, String, etc).
      */
     class AMQPPrimitivePropertySerializer(name: String, readMethod: Method) : PropertySerializer(name, readMethod) {
+
         override fun writeClassInfo(output: SerializationOutput) {}
 
         override fun readProperty(obj: Any?, schema: Schema, input: DeserializationInput): Any? {
-            return obj
+            return if (obj is Binary) obj.array else obj
         }
 
         override fun writeProperty(obj: Any?, data: Data, output: SerializationOutput) {
-            data.putObject(readMethod.invoke(obj))
+            val value = readMethod.invoke(obj)
+            if (value is ByteArray) {
+                data.putObject(Binary(value))
+            } else {
+                data.putObject(value)
+            }
         }
     }
 }

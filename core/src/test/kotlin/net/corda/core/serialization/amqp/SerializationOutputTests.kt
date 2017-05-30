@@ -64,6 +64,8 @@ class SerializationOutputTests {
 
     data class SortedSetWrapper(val set: SortedSet<Int>)
 
+    object KotlinObject
+
     class Mismatch(fred: Int) {
         val ginger: Int = fred
 
@@ -103,6 +105,7 @@ class SerializationOutputTests {
         // Check that a vanilla AMQP decoder can deserialize without schema.
         val result = decoder.readObject() as Envelope
         assertNotNull(result)
+        println(result.schema)
 
         val des = DeserializationInput(freshDeserializationFactory)
         val desObj = des.deserialize(bytes)
@@ -345,6 +348,11 @@ class SerializationOutputTests {
     fun `test null polymorphic property`() {
         val obj = PolymorphicProperty(null)
         serdes(obj)
+    }
+
+    @Test
+    fun `test kotlin object`() {
+        serdes(KotlinObject)
     }
 
 }
