@@ -4,10 +4,7 @@ import com.google.common.reflect.TypeToken
 import org.apache.qpid.proton.codec.Data
 import java.beans.Introspector
 import java.io.NotSerializableException
-import java.lang.reflect.Method
-import java.lang.reflect.Modifier
-import java.lang.reflect.ParameterizedType
-import java.lang.reflect.Type
+import java.lang.reflect.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
@@ -73,12 +70,12 @@ internal fun constructorForDeserialization(type: Type): KFunction<Any>? {
  */
 internal fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>?, type: Type, factory: SerializerFactory): Collection<PropertySerializer> {
     val clazz = concreteClass(type)
-    return if (kotlinConstructor != null) propertiesForSerialization(kotlinConstructor, factory) else propertiesForSerialization(clazz, factory)
+    return if (kotlinConstructor != null) propertiesForSerializationFromConstructor(kotlinConstructor, type, factory) else propertiesForSerializationFromAbstract(clazz, type, factory)
 }
 
 private fun isConcrete(clazz: Class<*>): Boolean = !(clazz.isInterface || Modifier.isAbstract(clazz.modifiers))
 
-private fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>, factory: SerializerFactory): Collection<PropertySerializer> {
+private fun <T : Any> propertiesForSerializationFromConstructor(kotlinConstructor: KFunction<T>, type: Type, factory: SerializerFactory): Collection<PropertySerializer> {
     val clazz = (kotlinConstructor.returnType.classifier as KClass<*>).javaObjectType
     // Kotlin reflection doesn't work with Java getters the way you might expect, so we drop back to good ol' beans.
     val properties = Introspector.getBeanInfo(clazz).propertyDescriptors.filter { it.name != "class" }.groupBy { it.name }.mapValues { it.value[0] }
@@ -90,10 +87,11 @@ private fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>
         // Check that the method has a getter in java.
         val getter = matchingProperty.readMethod ?: throw NotSerializableException("Property has no getter method for $name of $clazz." +
                 " If using Java and the parameter name looks anonymous, check that you have the -parameters option specified in the Java compiler.")
+        val returnType = resolveTypeVariables(getter.genericReturnType, type)
         if (constructorParamTakesReturnTypeOfGetter(getter, param)) {
-            rc += PropertySerializer.make(name, getter, getter.genericReturnType, factory)
+            rc += PropertySerializer.make(name, getter, returnType, factory)
         } else {
-            throw NotSerializableException("Property type ${getter.genericReturnType} for $name of $clazz differs from constructor parameter type ${param.type.javaType}")
+            throw NotSerializableException("Property type $returnType for $name of $clazz differs from constructor parameter type ${param.type.javaType}")
         }
     }
     return rc
@@ -101,35 +99,37 @@ private fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>
 
 private fun constructorParamTakesReturnTypeOfGetter(getter: Method, param: KParameter): Boolean = TypeToken.of(param.type.javaType).isSupertypeOf(getter.genericReturnType)
 
-private fun propertiesForSerialization(clazz: Class<*>, factory: SerializerFactory): Collection<PropertySerializer> {
+private fun propertiesForSerializationFromAbstract(clazz: Class<*>, type: Type, factory: SerializerFactory): Collection<PropertySerializer> {
     // Kotlin reflection doesn't work with Java getters the way you might expect, so we drop back to good ol' beans.
     val properties = Introspector.getBeanInfo(clazz).propertyDescriptors.filter { it.name != "class" }.sortedBy { it.name }
     val rc: MutableList<PropertySerializer> = ArrayList(properties.size)
     for (property in properties) {
         // Check that the method has a getter in java.
         val getter = property.readMethod ?: throw NotSerializableException("Property has no getter method for ${property.name} of $clazz.")
-        rc += PropertySerializer.make(property.name, getter, getter.genericReturnType, factory)
+        val returnType = resolveTypeVariables(getter.genericReturnType, type)
+        rc += PropertySerializer.make(property.name, getter, returnType, factory)
     }
     return rc
 }
 
-internal fun interfacesForSerialization(clazz: Type): List<Type> {
+internal fun interfacesForSerialization(type: Type): List<Type> {
     val interfaces = LinkedHashSet<Type>()
-    exploreType(clazz, interfaces)
+    exploreType(type, interfaces)
     return interfaces.toList()
 }
 
 private fun exploreType(type: Type?, interfaces: MutableSet<Type>) {
     val clazz = (type as? Class<*>) ?: (type as? ParameterizedType)?.rawType as? Class<*>
     if (clazz != null) {
-        if (clazz.isInterface) interfaces += clazz
+        if (clazz.isInterface) interfaces += type!!
         for (newInterface in clazz.genericInterfaces) {
             if (newInterface !in interfaces) {
                 interfaces += newInterface
-                exploreType(newInterface, interfaces)
+                exploreType(resolveTypeVariables(newInterface, type), interfaces)
             }
         }
-        exploreType(clazz.genericSuperclass, interfaces)
+        val superClass = clazz.genericSuperclass ?: return
+        exploreType(resolveTypeVariables(superClass, type), interfaces)
     }
 }
 
@@ -155,4 +155,45 @@ fun Data.withList(block: Data.() -> Unit) {
     enter()
     block()
     exit() // exit list
+}
+
+fun resolveTypeVariables(actualType: Type, contextType: Type?): Type {
+    val resolvedType = if (contextType != null) TypeToken.of(contextType).resolveType(actualType).type else actualType
+    // TODO: surely we check it is concrete at this point with no TypeVariables
+    return if (resolvedType is TypeVariable<*>) {
+        val bounds = resolvedType.bounds
+        return if (bounds.isEmpty()) SerializerFactory.AnyType else if (bounds.size == 1) resolveTypeVariables(bounds[0], contextType) else throw NotSerializableException("Got bounded type $actualType but only support single bound.")
+    } else {
+        resolvedType
+    }
+}
+
+fun checkTypeIsResolved(type: Type) {
+    if (type !is Class<*>) {
+        if (type is ParameterizedType) {
+            // Check the raw type and the arguments
+            if (type.rawType !is Class<*>) throw NotSerializableException("ParameterizedType $type has non-Class raw type.")
+            for (paramType in type.actualTypeArguments) {
+                checkTypeIsResolved(paramType)
+            }
+        } else if (type is TypeVariable<*>) {
+            throw NotSerializableException("Found unbound generic type variable $type")
+        } else if (type is WildcardType) {
+            if (type != SerializerFactory.AnyType) {
+                TODO("Wildcards")
+            }
+        } else if (type is GenericArrayType) {
+            checkTypeIsResolved(type.genericComponentType)
+        }
+    } else if (!type.typeParameters.isEmpty()) {
+        throw NotSerializableException("Generic class with no type variable bound.")
+    }
+}
+
+fun Type.asClass(): Class<*>? {
+    return if (this is Class<*>) {
+        this
+    } else if (this is ParameterizedType) {
+        this.rawType.asClass()
+    } else null
 }

@@ -20,7 +20,7 @@ import javax.annotation.concurrent.ThreadSafe
  * Factory of serializers designed to be shared across threads and invocations.
  */
 // TODO: enums
-// TODO: object references
+// TODO: object references - need better fingerprinting?
 // TODO: class references? (e.g. cheat with repeated descriptors using a long encoding, like object ref proposal)
 // TODO: Inner classes etc
 // TODO: support for intern-ing of deserialized objects for some core types (e.g. PublicKey) for memory efficiency
@@ -32,7 +32,8 @@ import javax.annotation.concurrent.ThreadSafe
 // TODO: apply class loader logic and an "app context" throughout this code.
 // TODO: schema evolution solution when the fingerprints do not line up.
 // TODO: allow definition of well known types that are left out of the schema.
-// TODO: automatically support byte[] without having to wrap in [Binary].
+// TODO: generally map Object to '*' all over the place
+// TODO: found a document that states textual descriptors are Symbols.  Adjust schema class appropriately.
 @ThreadSafe
 class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     private val serializersByType = ConcurrentHashMap<Type, AMQPSerializer<out Any>>()
@@ -46,8 +47,8 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
      * restricted type processing).
      */
     @Throws(NotSerializableException::class)
-    fun get(actualType: Class<*>?, denormalisedDeclaredType: Type): AMQPSerializer<out Any> {
-        val declaredType = normaliseType(denormalisedDeclaredType)
+    fun get(actualType: Class<*>?, declaredType: Type): AMQPSerializer<out Any> {
+        //val declaredType = resolveTypeVariables(denormalisedDeclaredType, null)
         if (declaredType is ParameterizedType) {
             return serializersByType.computeIfAbsent(declaredType) {
                 // We allow only Collection and Map.
@@ -120,25 +121,10 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }
 
-    private fun restrictedTypeForName(name: String): Type {
-        return if (name.endsWith("[]")) {
-            val elementType = restrictedTypeForName(name.substring(0, name.lastIndex - 1))
-            if (elementType is ParameterizedType || elementType is GenericArrayType) {
-                DeserializedGenericArrayType(elementType)
-            } else if (elementType is Class<*>) {
-                java.lang.reflect.Array.newInstance(elementType, 0).javaClass
-            } else {
-                throw NotSerializableException("Not able to deserialize array type: $name")
-            }
-        } else {
-            DeserializedParameterizedType.make(name)
-        }
-    }
-
     private fun processRestrictedType(typeNotation: RestrictedType) {
         serializersByDescriptor.computeIfAbsent(typeNotation.descriptor.name!!) {
             // TODO: class loader logic, and compare the schema.
-            val type = restrictedTypeForName(typeNotation.name)
+            val type = typeForName(typeNotation.name)
             get(null, type)
         }
     }
@@ -146,11 +132,13 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     private fun processCompositeType(typeNotation: CompositeType) {
         serializersByDescriptor.computeIfAbsent(typeNotation.descriptor.name!!) {
             // TODO: class loader logic, and compare the schema.
-            val clazz = Class.forName(typeNotation.name)
-            get(clazz, clazz)
+            val type = typeForName(typeNotation.name)
+            //val clazz = Class.forName(typeNotation.name)
+            get(type as? Class<*> ?: (type as? ParameterizedType)?.rawType as? Class<*> ?: throw NotSerializableException("Unable to build composite type for $type"), type)
         }
     }
 
+    /*
     private fun checkParameterisedTypesConcrete(actualTypeArguments: Array<out Type>) {
         for (type in actualTypeArguments) {
             // Needs to be another parameterised type or a class, or any type.
@@ -162,7 +150,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 }
             }
         }
-    }
+    }*/
 
     private fun makeClassSerializer(clazz: Class<*>): AMQPSerializer<out Any> {
         return serializersByType.computeIfAbsent(clazz) {
@@ -185,6 +173,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     }
 
     private fun makeGenericClassSerializer(type: ParameterizedType): AMQPSerializer<out Any> {
+        // TODO: do we need custom serializer logic here?
         return if (type is GenericArrayType) {
             whitelisted(type.genericComponentType)
             ArraySerializer(type, this)
@@ -238,6 +227,10 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
             return primitiveTypeNames[Primitives.unwrap(clazz)]
         }
 
+        fun primitiveType(type: String): Class<*>? {
+            return namesOfPrimitiveTypes[type]
+        }
+
         private val primitiveTypeNames: Map<Class<*>, String> = mapOf(
                 Boolean::class.java to "boolean",
                 Byte::class.java to "byte",
@@ -259,6 +252,33 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 ByteArray::class.java to "binary",
                 String::class.java to "string",
                 Symbol::class.java to "symbol")
+
+        private val namesOfPrimitiveTypes: Map<String, Class<*>> = primitiveTypeNames.map { it.value to it.key }.toMap()
+
+        fun nameForType(type: Type): String {
+            if (type is Class<*>) {
+                return primitiveTypeName(type) ?: type.name
+            } else if (type is ParameterizedType) {
+                return "${nameForType(type.rawType)}<${type.actualTypeArguments.joinToString { nameForType(it) }}>"
+            } else if (type is GenericArrayType) {
+                return "${nameForType(type.genericComponentType)}[]"
+            } else throw NotSerializableException("Unable to render type $type to a string.")
+        }
+
+        private fun typeForName(name: String): Type {
+            return if (name.endsWith("[]")) {
+                val elementType = typeForName(name.substring(0, name.lastIndex - 1))
+                if (elementType is ParameterizedType || elementType is GenericArrayType) {
+                    DeserializedGenericArrayType(elementType)
+                } else if (elementType is Class<*>) {
+                    java.lang.reflect.Array.newInstance(elementType, 0).javaClass
+                } else {
+                    throw NotSerializableException("Not able to deserialize array type: $name")
+                }
+            } else {
+                DeserializedParameterizedType.make(name)
+            }
+        }
     }
 
     object AnyType : WildcardType {
@@ -269,4 +289,3 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         override fun toString(): String = "?"
     }
 }
-

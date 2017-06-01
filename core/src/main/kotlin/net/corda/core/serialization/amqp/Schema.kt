@@ -12,7 +12,6 @@ import java.io.NotSerializableException
 import java.lang.reflect.GenericArrayType
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
-import java.lang.reflect.TypeVariable
 
 // TODO: get an assigned number as per AMQP spec
 val DESCRIPTOR_TOP_32BITS: Long = 0xc0da0000
@@ -321,10 +320,11 @@ private val ANY_TYPE_HASH: String = "Any type = true"
  * different.
  */
 // TODO: write tests
-internal fun fingerprintForType(type: Type, factory: SerializerFactory): String = Base58.encode(fingerprintForType(type, HashSet(), Hashing.murmur3_128().newHasher(), factory).hash().asBytes())
+internal fun fingerprintForType(type: Type, factory: SerializerFactory): String = Base58.encode(fingerprintForType(type, null, HashSet(), Hashing.murmur3_128().newHasher(), factory).hash().asBytes())
 
-private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, hasher: Hasher, factory: SerializerFactory): Hasher {
-    val type = normaliseType(actualType)
+private fun fingerprintForType(actualType: Type, contextType: Type?, alreadySeen: MutableSet<Type>, hasher: Hasher, factory: SerializerFactory): Hasher {
+    checkTypeIsResolved(actualType)
+    val type = actualType //resolveTypeVariables(actualType, contextType)
     return if (type in alreadySeen) {
         hasher.putUnencodedChars(ALREADY_SEEN_HASH)
     } else {
@@ -334,7 +334,7 @@ private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, 
                 hasher.putUnencodedChars(ANY_TYPE_HASH)
             } else if (type is Class<*>) {
                 if (type.isArray) {
-                    fingerprintForType(type.componentType, alreadySeen, hasher, factory).putUnencodedChars(ARRAY_HASH)
+                    fingerprintForType(type.componentType, contextType, alreadySeen, hasher, factory).putUnencodedChars(ARRAY_HASH)
                 } else if (SerializerFactory.isPrimitive(type)) {
                     hasher.putUnencodedChars(type.name)
                 } else if (Collection::class.java.isAssignableFrom(type) || Map::class.java.isAssignableFrom(type)) {
@@ -347,12 +347,7 @@ private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, 
                             // TODO: name collision is too likely for kotlin objects
                             hasher.putUnencodedChars(type.name)
                         } else {
-                            // Hash the class + properties + interfaces
-                            propertiesForSerialization(constructorForDeserialization(type), type, factory).fold(hasher.putUnencodedChars(type.name)) { orig, param ->
-                                fingerprintForType(param.readMethod.genericReturnType, alreadySeen, orig, factory).putUnencodedChars(param.name).putUnencodedChars(if (param.mandatory) NOT_NULLABLE_HASH else NULLABLE_HASH)
-                            }
-                            interfacesForSerialization(type).map { fingerprintForType(it, alreadySeen, hasher, factory) }
-                            hasher
+                            fingerprintForObject(type, contextType, alreadySeen, hasher, factory)
                         }
                     } else {
                         hasher.putUnencodedChars(customSerializer.typeDescriptor)
@@ -360,10 +355,16 @@ private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, 
                 }
             } else if (type is ParameterizedType) {
                 // Hash the rawType + params
-                type.actualTypeArguments.fold(fingerprintForType(type.rawType, alreadySeen, hasher, factory)) { orig, paramType -> fingerprintForType(paramType, alreadySeen, orig, factory) }
+                val clazz = type.rawType as Class<*>
+                val startingHash = if (Collection::class.java.isAssignableFrom(clazz) || Map::class.java.isAssignableFrom(clazz)) {
+                    hasher.putUnencodedChars(clazz.name)
+                } else {
+                    fingerprintForObject(type, type, alreadySeen, hasher, factory)
+                }
+                type.actualTypeArguments.fold(startingHash) { orig, paramType -> fingerprintForType(paramType, type, alreadySeen, orig, factory) }
             } else if (type is GenericArrayType) {
                 // Hash the element type + some array hash
-                fingerprintForType(type.genericComponentType, alreadySeen, hasher, factory).putUnencodedChars(ARRAY_HASH)
+                fingerprintForType(type.genericComponentType, contextType, alreadySeen, hasher, factory).putUnencodedChars(ARRAY_HASH)
             } else {
                 throw NotSerializableException("Don't know how to hash")
             }
@@ -373,11 +374,12 @@ private fun fingerprintForType(actualType: Type, alreadySeen: MutableSet<Type>, 
     }
 }
 
-fun normaliseType(actualType: Type): Type {
-    return if (actualType is TypeVariable<*>) {
-        val bounds = actualType.bounds
-        return if (bounds.isEmpty()) SerializerFactory.AnyType else normaliseType(bounds[0])
-    } else {
-        actualType
+private fun fingerprintForObject(type: Type, contextType: Type?, alreadySeen: MutableSet<Type>, hasher: Hasher, factory: SerializerFactory): Hasher {
+    // Hash the class + properties + interfaces
+    val name = (type as? Class<*>)?.name ?: ((type as? ParameterizedType)?.rawType as? Class<*>)?.name ?: throw NotSerializableException("Expected only Class or ParameterizedType but found $type")
+    propertiesForSerialization(constructorForDeserialization(type), contextType ?: type, factory).fold(hasher.putUnencodedChars(name)) { orig, prop ->
+        fingerprintForType(prop.resolvedType, type, alreadySeen, orig, factory).putUnencodedChars(prop.name).putUnencodedChars(if (prop.mandatory) NOT_NULLABLE_HASH else NULLABLE_HASH)
     }
+    interfacesForSerialization(type).map { fingerprintForType(it, type, alreadySeen, hasher, factory) }
+    return hasher
 }

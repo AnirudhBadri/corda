@@ -58,11 +58,31 @@ class SerializationOutputTests {
     @Suppress("AddVarianceModifier")
     data class GenericFoo<T>(val bar: String, val pub: T)
 
+    data class ContainsGenericFoo(val contain: GenericFoo<String>)
+
+    data class NestedGenericFoo<T>(val contain: GenericFoo<T>)
+
+    data class ContainsNestedGenericFoo(val contain: NestedGenericFoo<String>)
+
     data class TreeMapWrapper(val tree: TreeMap<Int, Foo>)
 
     data class NavigableMapWrapper(val tree: NavigableMap<Int, Foo>)
 
     data class SortedSetWrapper(val set: SortedSet<Int>)
+
+    open class InheritedGeneric<X>(val foo: X)
+
+    data class ExtendsGeneric(val bar: Int, val pub: String) : InheritedGeneric<String>(pub)
+
+    interface GenericInterface<X> {
+        val pub: X
+    }
+
+    data class ImplementsGenericString(val bar: Int, override val pub: String) : GenericInterface<String>
+
+    data class ImplementsGenericX<X>(val bar: Int, override val pub: X) : GenericInterface<X>
+
+    data class CapturesGenericX(val foo: GenericInterface<String>)
 
     object KotlinObject
 
@@ -158,7 +178,7 @@ class SerializationOutputTests {
         serdes(obj)
     }
 
-    @Test
+    @Test(expected = NotSerializableException::class)
     fun `test top level list array`() {
         val obj = arrayOf(listOf("Fred", "Ginger"), listOf("Rogers", "Hammerstein"))
         serdes(obj)
@@ -200,9 +220,41 @@ class SerializationOutputTests {
         serdes(obj)
     }
 
-    @Test
+    @Test(expected = NotSerializableException::class)
     fun `test generic foo`() {
         val obj = GenericFoo("Fred", "Ginger")
+        serdes(obj)
+    }
+
+    @Test
+    fun `test generic foo as property`() {
+        val obj = ContainsGenericFoo(GenericFoo("Fred", "Ginger"))
+        serdes(obj)
+    }
+
+    @Test
+    fun `test nested generic foo as property`() {
+        val obj = ContainsNestedGenericFoo(NestedGenericFoo(GenericFoo("Fred", "Ginger")))
+        serdes(obj)
+    }
+
+    // TODO: Generic interfaces / superclasses
+
+    @Test
+    fun `test extends generic`() {
+        val obj = ExtendsGeneric(1, "Ginger")
+        serdes(obj)
+    }
+
+    @Test
+    fun `test implements generic`() {
+        val obj = ImplementsGenericString(1, "Ginger")
+        serdes(obj)
+    }
+
+    @Test
+    fun `test implements generic captured`() {
+        val obj = CapturesGenericX(ImplementsGenericX(1, "Ginger"))
         serdes(obj)
     }
 
@@ -354,5 +406,4 @@ class SerializationOutputTests {
     fun `test kotlin object`() {
         serdes(KotlinObject)
     }
-
 }
