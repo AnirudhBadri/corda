@@ -19,16 +19,6 @@ import kotlin.reflect.jvm.javaType
 @Retention(AnnotationRetention.RUNTIME)
 annotation class ConstructorForDeserialization
 
-internal fun concreteClass(type: Type): Class<*> {
-    if (type is Class<*>) {
-        return type
-    } else if (type is ParameterizedType) {
-        return concreteClass(type.rawType)
-    } else {
-        throw NotSerializableException("Expected either a Class or ParameterizedType but is $type")
-    }
-}
-
 /**
  * Code for finding the constructor we will use for deserialization.
  *
@@ -37,7 +27,7 @@ internal fun concreteClass(type: Type): Class<*> {
  * annotated with [@CordaConstructor].  It will report an error if more than one constructor is annotated.
  */
 internal fun constructorForDeserialization(type: Type): KFunction<Any>? {
-    val clazz: Class<*> = concreteClass(type)
+    val clazz: Class<*> = type.asClass()!!
     if (isConcrete(clazz)) {
         var preferredCandidate: KFunction<Any>? = clazz.kotlin.primaryConstructor
         var annotatedCount = 0
@@ -69,7 +59,7 @@ internal fun constructorForDeserialization(type: Type): KFunction<Any>? {
  * names accessible via reflection.
  */
 internal fun <T : Any> propertiesForSerialization(kotlinConstructor: KFunction<T>?, type: Type, factory: SerializerFactory): Collection<PropertySerializer> {
-    val clazz = concreteClass(type)
+    val clazz = type.asClass()!!
     return if (kotlinConstructor != null) propertiesForSerializationFromConstructor(kotlinConstructor, type, factory) else propertiesForSerializationFromAbstract(clazz, type, factory)
 }
 

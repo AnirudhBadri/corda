@@ -36,8 +36,8 @@ import javax.annotation.concurrent.ThreadSafe
 // TODO: found a document that states textual descriptors are Symbols.  Adjust schema class appropriately.
 @ThreadSafe
 class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
-    private val serializersByType = ConcurrentHashMap<Type, AMQPSerializer<out Any>>()
-    private val serializersByDescriptor = ConcurrentHashMap<Any, AMQPSerializer<out Any>>()
+    private val serializersByType = ConcurrentHashMap<Type, AMQPSerializer<Any>>()
+    private val serializersByDescriptor = ConcurrentHashMap<Any, AMQPSerializer<Any>>()
     private val customSerializers = CopyOnWriteArrayList<CustomSerializer<out Any>>()
 
     /**
@@ -47,7 +47,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
      * restricted type processing).
      */
     @Throws(NotSerializableException::class)
-    fun get(actualType: Class<*>?, declaredType: Type): AMQPSerializer<out Any> {
+    fun get(actualType: Class<*>?, declaredType: Type): AMQPSerializer<Any> {
         //val declaredType = resolveTypeVariables(denormalisedDeclaredType, null)
         if (declaredType is ParameterizedType) {
             return serializersByType.computeIfAbsent(declaredType) {
@@ -88,7 +88,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
      * contained in the [Schema].
      */
     @Throws(NotSerializableException::class)
-    fun get(typeDescriptor: Any, schema: Schema): AMQPSerializer<out Any> {
+    fun get(typeDescriptor: Any, schema: Schema): AMQPSerializer<Any> {
         return serializersByDescriptor[typeDescriptor] ?: {
             processSchema(schema)
             serializersByDescriptor[typeDescriptor] ?: throw NotSerializableException("Could not find type matching descriptor $typeDescriptor.")
@@ -152,7 +152,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }*/
 
-    private fun makeClassSerializer(clazz: Class<*>): AMQPSerializer<out Any> {
+    private fun makeClassSerializer(clazz: Class<*>): AMQPSerializer<Any> {
         return serializersByType.computeIfAbsent(clazz) {
             if (isPrimitive(clazz)) {
                 AMQPPrimitiveSerializer(clazz)
@@ -172,7 +172,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }
 
-    private fun makeGenericClassSerializer(type: ParameterizedType): AMQPSerializer<out Any> {
+    private fun makeGenericClassSerializer(type: ParameterizedType): AMQPSerializer<Any> {
         // TODO: do we need custom serializer logic here?
         return if (type is GenericArrayType) {
             whitelisted(type.genericComponentType)
@@ -183,7 +183,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }
 
-    internal fun findCustomSerializer(clazz: Class<*>): AMQPSerializer<out Any>? {
+    internal fun findCustomSerializer(clazz: Class<*>): AMQPSerializer<Any>? {
         for (customSerializer in customSerializers) {
             if (customSerializer.isSerializerFor(clazz)) {
                 return customSerializer
@@ -193,18 +193,13 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     }
 
     private fun whitelisted(type: Type): Boolean {
-        if (type is Class<*>) {
-            if (whitelist.hasListed(type) || hasAnnotationInHierarchy(type)) {
-                return true
-            } else {
-                throw NotSerializableException("Class $type is not on the whitelist or annotated with @CordaSerializable.")
-            }
+        val clazz = type.asClass()!!
+        if (whitelist.hasListed(clazz) || hasAnnotationInHierarchy(clazz)) {
+            return true
         } else {
-            //TODO("whitelist checking of generics")
-            return whitelisted(concreteClass(type))
+            throw NotSerializableException("Class $type is not on the whitelist or annotated with @CordaSerializable.")
         }
     }
-
 
     // Recursively check the class, interfaces and superclasses for our annotation.
     internal fun hasAnnotationInHierarchy(type: Class<*>): Boolean {
@@ -213,7 +208,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
                 || (type.superclass != null && hasAnnotationInHierarchy(type.superclass))
     }
 
-    private fun makeMapSerializer(declaredType: ParameterizedType): AMQPSerializer<out Any> {
+    private fun makeMapSerializer(declaredType: ParameterizedType): AMQPSerializer<Any> {
         val rawType = declaredType.rawType as Class<*>
         rawType.checkNotUnorderedHashMap()
         return MapSerializer(declaredType, this)

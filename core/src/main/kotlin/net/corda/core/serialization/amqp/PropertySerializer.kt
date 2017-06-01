@@ -67,9 +67,9 @@ sealed class PropertySerializer(val name: String, val readMethod: Method, val re
     /**
      * A property serializer for a complex type (another object).
      */
-    class DescribedTypePropertySerializer(name: String, readMethod: Method, resolvedType: Type, private val lazyTypeSerializer: () -> AMQPSerializer<out Any>) : PropertySerializer(name, readMethod, resolvedType) {
+    class DescribedTypePropertySerializer(name: String, readMethod: Method, resolvedType: Type, private val lazyTypeSerializer: () -> AMQPSerializer<*>) : PropertySerializer(name, readMethod, resolvedType) {
         // This is lazy so we don't get an infinite loop when a method returns an instance of the class.
-        private val typeSerializer: AMQPSerializer<out Any> by lazy { lazyTypeSerializer() }
+        private val typeSerializer: AMQPSerializer<*> by lazy { lazyTypeSerializer() }
 
         override fun writeClassInfo(output: SerializationOutput) {
             if (resolvedType != Any::class.java) {
