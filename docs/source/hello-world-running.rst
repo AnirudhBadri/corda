@@ -66,19 +66,15 @@ When we run the ``deployNodes`` task, for each node definition, our build system
 * Build a CorDapp jar from the project's source files
 * Create a node in ``build/nodes`` with the CorDapp installed
 
-Let's do that now by running:
+Let's do that now by running either:
 
-* For Windows:
+.. code:: python
 
-    .. code:: python
+    // On Windows
+    gradlew clean deployNodes
 
-        gradlew clean deployNodes
-
-* For Mac:
-
-    .. code:: python
-
-        ./gradlew clean deployNodes
+    // On Mac
+    ./gradlew clean deployNodes
 
 Running the nodes
 -----------------
@@ -107,28 +103,109 @@ to this folder, we'll see the four nodes, each with the following structure:
 
 We can now run the nodes from the root of the project by running:
 
-* For Windows:
+.. code:: python
 
-    .. code:: python
+    // On Windows for a Java CorDapp
+    call java-source/build/nodes/runnodes.bat
 
-        gradlew clean deployNodes
+    // On Windows for a Kotlin CorDapp
+    call kotlin-source/build/nodes/runnodes.bat
 
-* For Mac:
+    // On Mac for a Java CorDapp
+    java-source/build/nodes/runnodes
 
-    .. code:: python
+    // On Mac for a Kotlin CorDapp
+    kotlin-source/build/nodes/runnodes
 
-        ./gradlew clean deployNodes
-
-This will start a terminal window for each node, and an additional terminal windows for each node's webserver - eight
+This will start a terminal window for each node, and an additional terminal window for each node's webserver - eight
 terminal windows in all. Give each node a moment to start - you'll know its ready when its terminal windows displays
 the message, "Welcome to the Corda interactive shell.".
 
-[$diagram of ready node]
+[$screenshot of ready node]
 
 Interacting with the nodes
 --------------------------
-// TODO: Interact via Crash shell
+Now that our nodes are running, we can order one of them to kick off our ``IOUFlow``. In a larger app, we'd generally
+interact with our node via the node's RPC interface, or even an API built on top of that. Here, for simplicity, we'll
+be interacting with the node via its built-in CRaSH shell.
 
-// TODO: Kick off flow on one node
-// TODO: Look at output on two counterparties
-// TODO: Show there's nothing in the vault of the third
+Go to the terminal window with CRaSH shell of Node A. Typing ``help`` will display a list of the available commands.
+
+Let's create an IOU of 100 with Node B. We start the ``IOUFlow`` by typing:
+
+.. code:: python
+
+    start IOUFlow arg0: 99, arg1: "CN=NodeB,O=NodeB,L=New York,C=US"
+
+The process of agreeing the IOU between Node A and Node B will happen automatically, and we'll see a series of
+progress steps appearing to show the flow's progress.
+
+In theory, the success of the flow should have caused an IOU to be recorded in the vaults of both Node A and Node B.
+Equally importantly, Node C - although part of the same network - should not be aware of this transaction.
+
+We'll be using RPC operations to check the contents of each node. Typing ``run`` will display a list of the available
+commands. We can examine don't forget dead link checking - GA, with a custom 404 page and alerts
+the contents of a node's vault by running:
+
+.. code:: python
+
+     run vaultAndUpdates
+
+And we can also examine a node's transaction storage by running:
+
+.. code:: python
+
+     run verifiedTransactions
+
+Checking the vault of Node A and Node B should display the following output:
+
+.. code:: python
+
+    first:
+    - state:
+        data:
+          value: 99
+          sender: "CN=NodeA,O=NodeA,L=London,C=UK"
+          recipient: "CN=NodeB,O=NodeB,L=New York,C=US"
+          contract:
+            legalContractReference: "559322B95BCF7913E3113962DC3F3CBD71C818C66977721580C045DC41C813A5"
+          participants:
+          - "CN=NodeA,O=NodeA,L=London,C=UK"
+          - "CN=NodeB,O=NodeB,L=New York,C=US"
+        notary: "CN=Controller,O=R3,OU=corda,L=London,C=UK,OU=corda.notary.validating"
+        encumbrance: null
+      ref:
+        txhash: "656A1BF64D5AEEC6F6C944E287F34EF133336F5FC2C5BFB9A0BFAE25E826125F"
+        index: 0
+    second: "(observable)"
+
+But checking the vault of Node C should output nothing!
+
+.. code:: python
+
+    first: []
+    second: "(observable)"
+
+Conclusion
+----------
+We have now deployed a simple CorDapp that allows IOUs to be issued onto the ledger. Like all CorDapps, our
+CorDapp is made up of three key parts:
+
+* The ``IOUState``, representing IOUs on the ledger
+* The ``IOUContract``, controlling the evolution of IOUs over time
+* The ``IOUFlow``, orchestrating the process of agreeing the creation of an IOU on-ledger.
+
+Together, these three parts completely determine how IOUs are created and evolved on the ledger.
+
+Next steps
+----------
+You should now be ready to develop your own CorDapps. There's
+`a more fleshed-out version of the IOU CorDapp <https://github.com/corda/cordapp-tutorial>`_
+with an API and web front-end, and a set of example CorDapps in
+`the main Corda repo <https://github.com/corda/corda>`_, under ``samples``. You can read about how to run these
+samples :doc:`here <running-the-demos>`.
+
+As you write CorDapps, you can learn more about the API available :doc:`here <api>`.
+
+If you get stuck at any point, please reach out on `Slack <https://slack.corda.net/>`_,
+`Discourse <https://discourse.corda.net/>`_, or `Stack Overflow <https://stackoverflow.com/questions/tagged/corda>`_.

@@ -1,8 +1,8 @@
 Introduction
 ============
 
-By this point, your dev environment is set up $[link], and you've run your first CorDapp $[link] and possibly
-some demos as well [$link]. What comes next?
+By this point, :doc:`your dev environment is set up <getting-set-up>`, and you've run
+:doc:`your first CorDapp <tutorial-cordapp>` and possibly :doc:`some demos <running-the-demos>`. What comes next?
 
 Corda is a platform for the development of *CorDapps* (Corda Distributed Applications). CorDapps are installed on
 Corda nodes to give them the ability to conduct some new process – from issuing a debt instrument to making a restaurant
@@ -25,22 +25,19 @@ will have the following elements:
 
 * The states will be IOUStates, each instance of which represents an IOU. We can visualize an IOUState as follows:
 
-  $[diagram of an IOUState]
-
+  .. image:: resources/tutorial-state.png
+     :scale: 25%
+     :align: center
 
 * Our contract will be the IOUContract, which will impose rules on how IOUs can evolve over time. Our contract will
-  only allow creating new IOUs - transferring existing IOUs or paying off an IOU with cash will not be allowed.
-  However, we can easily extend our CorDapp to handle these use-cases later on).
+  only allow nodes to create new IOUs - transferring existing IOUs or paying off an IOU with cash will not be allowed.
+  We can easily extend our CorDapp to handle these use-cases later on.
 
-  To prevent people from transferring or paying off IOUs, our IOUContract will enforce the following rules:
-
-  $[diagrams of various invalid transactions, then a valid one]
-
-
-* Our flow will be the IOUFlow, which will allow two nodes to communicate and agree on the creation of a new IOU. In
-  traditional distributed ledger systems, all data is broadcast to every network participant, so you probably don’t
-  even think about this step – you simply package up your ledger update and send it out into the world. In Corda, we
-  can carefully control who sees what during the process of agreeing a ledger update using flows.
+* Our flow will be the IOUFlow, allowing two nodes to communicate and agree on the creation of a new IOU on the
+  ledger. In traditional distributed ledger systems, where all data is broadcast to every network participant, you
+  don’t even think about this step – you simply package up your ledger update and send it out into the world. In
+  Corda, on the other hand, we use flows to carefully control who sees what during the process of agreeing a
+  ledger update.
 
   The IOUFlow will have the following steps:
 
