@@ -311,15 +311,332 @@ retrieved earlier.
             });
         }
 
-// TODO: Go back and update IOUState to point to the new contract
+Now that we have defined our IOUContract, let's go back and modify our IOUState to point to this new contract:
+
+.. container:: codeset
+
+    .. code-block:: kotlin
+
+        class IOUState(val value: Int,
+                       val sender: Party,
+                       val recipient: Party,
+                       override val contract: IOUContract) : ContractState {
+
+            override val participants get() = listOf(sender, recipient)
+        }
+
+    .. code-block:: java
+
+        public class IOUState implements ContractState {
+            private final Integer value;
+            private final Party sender;
+            private final Party recipient;
+            private final IOUContract contract;
+
+            public IOUState(Integer value, Party sender, Party recipient, IOUContract contract) {
+                this.value = value;
+                this.sender = sender;
+                this.recipient = recipient;
+                this.contract = contract;
+            }
+
+            public Integer getValue() {
+                return value;
+            }
+
+            public Party getSender() {
+                return sender;
+            }
+
+            public Party getRecipient() {
+                return recipient;
+            }
+
+            @Override
+            public IOUContract getContract() {
+                return contract;
+            }
+
+            @Override
+            public List<AbstractParty> getParticipants() {
+                return ImmutableList.of(sender, recipient);
+            }
+        }
 
 Transaction tests
 -----------------
-Before moving on, let's set up some tests to ensure that the ``IOUContract`` is displaying the desired behavior.
+Before moving on, let's set up some tests to ensure that the ``IOUContract`` is providing the right controls on the
+evolution of each ``IOUState``.
 
-We'll be writing these tests using Corda's ``ledgerDSL`` transaction-testing framework. This will allow us to check that
-we've written our state and contract correctly without the overhead of spinning up a node.
+We'll be writing these tests using Corda's ``ledgerDSL`` transaction-testing framework. This will allow us to test
+our contract without the overhead of spinning up a node.
 
-// TODO: Finish off this test stuff
+Here's our first test:
 
-// TODO: handle imports
+.. container:: codeset
+
+    .. code-block:: kotlin
+
+        class IOUTransactionTests {
+            @Test
+            fun `transaction must include Create command`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        fails()
+                        command(MEGA_CORP_PUBKEY, MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        verifies()
+                    }
+                }
+            }
+        }
+
+    .. code-block:: java
+
+        public class IOUTransactionTests {
+            static private final Party miniCorp = getMINI_CORP();
+            static private final Party megaCorp = getMEGA_CORP();
+            static private final PublicKey[] keys = new PublicKey[2];
+
+            {
+                keys[0] = getMEGA_CORP_PUBKEY();
+                keys[1] = getMINI_CORP_PUBKEY();
+            }
+
+            @Test
+            public void transactionMustIncludeCreateCommand() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.fails();
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.verifies();
+                        return null;
+                    });
+                    return null;
+                });
+            }
+        }
+
+Here, we're using ``ledgerDSL`` to create a fake transaction. We can add inputs, outputs, commands, etc. to the
+transaction using the DSL's ``output``, ``input`` and ``command`` methods. At any point, we can assert that the
+transaction so far is either contractually valid (using ``verifies``) or contractually invalid (using ``fails``).
+
+In this instance:
+
+* We initially create a transaction with an output but no command. We assert that this transaction fails contract
+verification (since the ``Create`` command is missing)
+* We then add the ``Create`` command, and assert that contract verification now succeeds
+
+Here is the full set of tests we'll be using to test the ``IOUContract``:
+
+.. container:: codeset
+
+    .. code-block:: kotlin
+
+        class IOUTransactionTests {
+            @Test
+            fun `transaction must include Create command`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        fails()
+                        command(MEGA_CORP_PUBKEY, MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        verifies()
+                    }
+                }
+            }
+
+            @Test
+            fun `transaction must have no inputs`() {
+                ledger {
+                    transaction {
+                        input { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        command(MEGA_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("No inputs should be consumed when issuing an IOU.")
+                    }
+                }
+            }
+
+            @Test
+            fun `transaction must have one output`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        command(MEGA_CORP_PUBKEY, MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("Only one output state should be created.")
+                    }
+                }
+            }
+
+            @Test
+            fun `sender must sign transaction`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        command(MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("All of the participants must be signers.")
+                    }
+                }
+            }
+
+            @Test
+            fun `recipient must sign transaction`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        command(MEGA_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("All of the participants must be signers.")
+                    }
+                }
+            }
+
+            @Test
+            fun `sender is not recipient`() {
+                ledger {
+                    transaction {
+                        output { IOUState(1, MEGA_CORP, MEGA_CORP, IOUContract()) }
+                        command(MEGA_CORP_PUBKEY, MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("The sender and the recipient cannot be the same entity.")
+                    }
+                }
+            }
+
+            @Test
+            fun `cannot create negative-value IOUs`() {
+                ledger {
+                    transaction {
+                        output { IOUState(-1, MINI_CORP, MEGA_CORP, IOUContract()) }
+                        command(MEGA_CORP_PUBKEY, MINI_CORP_PUBKEY) { IOUContract.Create() }
+                        `fails with`("The IOU's value must be non-negative.")
+                    }
+                }
+            }
+        }
+
+    .. code-block:: java
+
+        public class IOUTransactionTests {
+            static private final Party miniCorp = getMINI_CORP();
+            static private final Party megaCorp = getMEGA_CORP();
+            static private final PublicKey[] keys = new PublicKey[2];
+
+            {
+                keys[0] = getMEGA_CORP_PUBKEY();
+                keys[1] = getMINI_CORP_PUBKEY();
+            }
+
+            @Test
+            public void transactionMustIncludeCreateCommand() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.fails();
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.verifies();
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void transactionMustHaveNoInputs() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.input(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("No inputs should be consumed when issuing an IOU.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void transactionMustHaveOneOutput() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("Only one output state should be created.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void senderMustSignTransaction() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        PublicKey[] keys = new PublicKey[1];
+                        keys[0] = getMINI_CORP_PUBKEY();
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("All of the participants must be signers.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void recipientMustSignTransaction() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, miniCorp, megaCorp, new IOUContract()));
+                        PublicKey[] keys = new PublicKey[1];
+                        keys[0] = getMEGA_CORP_PUBKEY();
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("All of the participants must be signers.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void senderIsNotRecipient() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(1, megaCorp, megaCorp, new IOUContract()));
+                        PublicKey[] keys = new PublicKey[1];
+                        keys[0] = getMEGA_CORP_PUBKEY();
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("The sender and the recipient cannot be the same entity.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+
+            @Test
+            public void cannotCreateNegativeValueIOUs() {
+                ledger(ledgerDSL -> {
+                    ledgerDSL.transaction(txDSL -> {
+                        txDSL.output(new IOUState(-1, miniCorp, megaCorp, new IOUContract()));
+                        txDSL.command(keys, IOUContract.Create::new);
+                        txDSL.failsWith("The IOU's value must be non-negative.");
+                        return null;
+                    });
+                    return null;
+                });
+            }
+        }
+
+Take a moment to run these tests to ensure that the ``IOUState`` and ``IOUContract`` are running fine.
+
+Progress so far
+---------------
+We've now written an ``IOUContract`` constraining the evolution of each ``IOUState`` over time. Now, an ``IOUState``
+can only be created on the ledger, not transferred or redeemed. Creating an ``IOUState`` requires an issuance
+transaction with no inputs, a single ``IOUState`` output, and a ``Create`` command. And the ``IOUState`` created by
+the issuance transaction must have a non-negative value, and its sender and recipient must be separate entities.
+
+The final step in the creation of our CorDapp will be to write the ``IOUFlow`` that will allow two node to agree the
+creation of a new ``IOUState``on the ledger, without informing the rest of the network.

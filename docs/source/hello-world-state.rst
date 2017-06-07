@@ -69,13 +69,6 @@ Let's update the definition of ``TemplateState`` in TemplateState.java or Templa
 
     .. code-block:: java
 
-        import com.google.common.collect.ImmutableList;
-        import net.corda.core.contracts.ContractState;
-        import net.corda.core.identity.AbstractParty;
-        import net.corda.core.identity.Party;
-
-        import java.util.List;
-
         public class IOUState implements ContractState {
             private final Integer value;
             private final Party sender;
@@ -121,4 +114,12 @@ We've renamed ``TemplateState`` to ``IOUState``, and added properties for ``valu
 In turn, we've defined ``participants`` as the list of the ``sender`` and ``recipient``.
 
 Finally, we've left ``IOUState``'s contract as ``TemplateContract``. We'll update this once we've defined the
-``IOUContract``. We'll define this next.
+``IOUContract``.
+
+Progress so far
+---------------
+We now have an ``IOUState`` that can represent IOUs as shared facts on the ledger. As we've seen, shared facts in Corda
+are simply JVM classes that implement the ``ContractState`` interface. From there, you can add any properties and
+methods you like.
+
+Next, we'll be writing the ``IOUContract`` that controls the evolution of these shared facts over time.
