@@ -1,6 +1,7 @@
 package net.corda.core.serialization.amqp
 
 import com.google.common.primitives.Primitives
+import com.google.common.reflect.TypeResolver
 import net.corda.core.checkNotUnorderedHashMap
 import net.corda.core.serialization.AllWhitelist
 import net.corda.core.serialization.ClassWhitelist
@@ -22,7 +23,7 @@ import javax.annotation.concurrent.ThreadSafe
 // TODO: enums
 // TODO: object references - need better fingerprinting?
 // TODO: class references? (e.g. cheat with repeated descriptors using a long encoding, like object ref proposal)
-// TODO: Inner classes etc
+// TODO: Inner classes etc. Should we allow? Currently not considered.
 // TODO: support for intern-ing of deserialized objects for some core types (e.g. PublicKey) for memory efficiency
 // TODO: maybe support for caching of serialized form of some core types for performance
 // TODO: profile for performance in general
@@ -32,7 +33,7 @@ import javax.annotation.concurrent.ThreadSafe
 // TODO: apply class loader logic and an "app context" throughout this code.
 // TODO: schema evolution solution when the fingerprints do not line up.
 // TODO: allow definition of well known types that are left out of the schema.
-// TODO: generally map Object to '*' all over the place
+// TODO: generally map Object to '*' all over the place in the schema
 // TODO: found a document that states textual descriptors are Symbols.  Adjust schema class appropriately.
 @ThreadSafe
 class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
@@ -43,25 +44,41 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     /**
      * Look up, and manufacture if necessary, a serializer for the given type.
      *
-     * @param actualType Will be null if there isn't an actual object instance available (e.g. for
+     * @param actualClass Will be null if there isn't an actual object instance available (e.g. for
      * restricted type processing).
      */
     @Throws(NotSerializableException::class)
-    fun get(actualType: Class<*>?, declaredType: Type): AMQPSerializer<Any> {
-        //val declaredType = resolveTypeVariables(denormalisedDeclaredType, null)
+    fun get(actualClass: Class<*>?, declaredType: Type): AMQPSerializer<Any> {
+        val declaredClass = declaredType.asClass()
+        if (declaredClass != null) {
+            val actualType: Type = inferTypeVariables(actualClass, declaredClass, declaredType) ?: declaredType
+            if (Collection::class.java.isAssignableFrom(declaredClass)) {
+                return serializersByType.computeIfAbsent(declaredType) {
+                    CollectionSerializer(declaredType as? ParameterizedType ?: DeserializedParameterizedType(declaredClass, arrayOf(AnyType), null), this)
+                }
+            } else if (Map::class.java.isAssignableFrom(declaredClass)) {
+                return serializersByType.computeIfAbsent(declaredClass) {
+                    makeMapSerializer(declaredType as? ParameterizedType ?: DeserializedParameterizedType(declaredClass, arrayOf(AnyType, AnyType), null))
+                }
+            } else {
+                return makeClassSerializer(actualClass ?: declaredClass, actualType, declaredType)
+            }
+        }
+        /*
+        // TODO: I think these if's are nested the wrong way around now...
         if (declaredType is ParameterizedType) {
             return serializersByType.computeIfAbsent(declaredType) {
                 // We allow only Collection and Map.
-                val rawType = declaredType.rawType
-                if (rawType is Class<*>) {
+                if (declaredClass != null) {
                     //checkParameterisedTypesConcrete(declaredType.actualTypeArguments)
-                    if (Collection::class.java.isAssignableFrom(rawType)) {
+                    if (Collection::class.java.isAssignableFrom(declaredClass)) {
                         CollectionSerializer(declaredType, this)
-                    } else if (Map::class.java.isAssignableFrom(rawType)) {
+                    } else if (Map::class.java.isAssignableFrom(declaredClass)) {
                         makeMapSerializer(declaredType)
                     } else {
                         //throw NotSerializableException("Declared types of $declaredType are not supported.")
-                        makeGenericClassSerializer(declaredType)
+                        val actualType: ParameterizedType? = reverseOutTypeVariables(actualClass, declaredClass, declaredType)
+                        makeGenericClassSerializer(actualType ?: declaredType)
                     }
                 } else {
                     throw NotSerializableException("Declared types of $declaredType are not supported.")
@@ -74,13 +91,74 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
             } else if (Map::class.java.isAssignableFrom(declaredType)) {
                 return serializersByType.computeIfAbsent(declaredType) { makeMapSerializer(DeserializedParameterizedType(declaredType, arrayOf(AnyType, AnyType), null)) }
             } else {
-                return makeClassSerializer(actualType ?: declaredType)
+                return makeClassSerializer(actualClass ?: declaredType)
             }
         } else if (declaredType is GenericArrayType) {
             return serializersByType.computeIfAbsent(declaredType) { ArraySerializer(declaredType, this) }
-        } else {
+        }*/ else {
             throw NotSerializableException("Declared types of $declaredType are not supported.")
         }
+    }
+
+    // TODO: test GenericArrayType
+    private fun inferTypeVariables(actualClass: Class<*>?, declaredClass: Class<*>, declaredType: Type): Type? {
+        if (declaredType is ParameterizedType) {
+            return inferTypeVariables(actualClass, declaredClass, declaredType)
+        } else if (declaredType is Class<*>) {
+            // Nothing to infer, otherwise we'd have ParameterizedType
+            return actualClass
+        } else if (declaredType is GenericArrayType) {
+            val declaredComponent = declaredType.genericComponentType
+            return inferTypeVariables(actualClass?.componentType, declaredComponent.asClass()!!, declaredComponent)?.asArray()
+        } else return null
+    }
+
+    private fun inferTypeVariables(actualClass: Class<*>?, declaredClass: Class<*>, declaredType: ParameterizedType): Type? {
+        if (actualClass == null || declaredClass == actualClass) {
+            return null
+        } else if (declaredClass.isAssignableFrom(actualClass)) {
+            return if (actualClass.typeParameters.isNotEmpty()) {
+                // The actual class can never have type variables resolved, so let's try and resolve them
+                // Search for declared type in the inheritance hierarchy and then see if that fills in all the variables
+                val implementationChain: List<Type>? = findPathToDeclared(actualClass, declaredType, mutableListOf<Type>())
+                if (implementationChain != null) {
+                    val start = implementationChain.last()
+                    val rest = implementationChain.dropLast(1).drop(1)
+                    val resolver = rest.reversed().fold(TypeResolver().where(start, declaredType)) {
+                        resolved, chainEntry ->
+                        val newResolved = resolved.resolveType(chainEntry)
+                        TypeResolver().where(chainEntry, newResolved)
+                    }
+                    // The end type is a special case as it is a Class, so we need to fake up a ParameterizedType for it to get the TypeResolver to do anything.
+                    val endType = DeserializedParameterizedType(actualClass, actualClass.typeParameters)
+                    val resolvedType = resolver.resolveType(endType)
+                    resolvedType
+                } else throw NotSerializableException("No inheritance path between actual $actualClass and declared $declaredType.")
+            } else actualClass
+        } else throw NotSerializableException("Found object of type $actualClass in a property expecting $declaredType")
+    }
+
+    // Stop when reach declared type or return null if we don't find it.
+    private fun findPathToDeclared(startingType: Type, declaredType: Type, chain: MutableList<Type>): List<Type>? {
+        chain.add(startingType)
+        val startingClass = startingType.asClass()
+        if (startingClass == declaredType.asClass()) {
+            // We're done...
+            return chain
+        }
+        // Now explore potential options of superclass and all interfaces
+        val superClass = startingClass?.genericSuperclass
+        val superClassChain = if (superClass != null) {
+            val resolved = TypeResolver().where(startingClass.asParameterizedType(), startingType.asParameterizedType()).resolveType(superClass)
+            findPathToDeclared(resolved, declaredType, ArrayList(chain))
+        } else null
+        if (superClassChain != null) return superClassChain
+        for (iface in startingClass?.genericInterfaces ?: emptyArray()) {
+            val resolved = TypeResolver().where(startingClass!!.asParameterizedType(), startingType.asParameterizedType()).resolveType(iface)
+            val chain = findPathToDeclared(resolved, declaredType, ArrayList(chain))
+            if (chain != null) return chain
+        }
+        return null
     }
 
     /**
@@ -152,27 +230,29 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }*/
 
-    private fun makeClassSerializer(clazz: Class<*>): AMQPSerializer<Any> {
-        return serializersByType.computeIfAbsent(clazz) {
+    private fun makeClassSerializer(clazz: Class<*>, type: Type, declaredType: Type): AMQPSerializer<Any> {
+        return serializersByType.computeIfAbsent(type) {
             if (isPrimitive(clazz)) {
                 AMQPPrimitiveSerializer(clazz)
             } else {
-                findCustomSerializer(clazz) ?: {
-                    if (clazz.isArray) {
-                        whitelisted(clazz.componentType)
-                        ArraySerializer(clazz, this)
+                // TODO: the custom serializer, if it supports subclasses, should output a RestrictedType to map from sub- to super-class to the schema
+                findCustomSerializer(clazz, declaredType) ?: {
+                    if (type.isArray()) {
+                        whitelisted(type.componentType())
+                        ArraySerializer(type, this)
                     } else if (clazz.kotlin.objectInstance != null) {
+                        whitelisted(clazz)
                         SingletonSerializer(clazz, clazz.kotlin.objectInstance!!, this)
                     } else {
-                        whitelisted(clazz)
-                        ObjectSerializer(clazz, this)
+                        whitelisted(type)
+                        ObjectSerializer(type, this)
                     }
                 }()
             }
         }
     }
 
-    private fun makeGenericClassSerializer(type: ParameterizedType): AMQPSerializer<Any> {
+    private fun makeGenericClassSerializer(type: Type): AMQPSerializer<Any> {
         // TODO: do we need custom serializer logic here?
         return if (type is GenericArrayType) {
             whitelisted(type.genericComponentType)
@@ -183,10 +263,20 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
         }
     }
 
-    internal fun findCustomSerializer(clazz: Class<*>): AMQPSerializer<Any>? {
+    internal fun findCustomSerializer(clazz: Class<*>, declaredType: Type): AMQPSerializer<Any>? {
+        // TODO: bah humbug.... this breaks lots of stuff.
+        // TODO: For now we do not support declaredType being anything other than most general form the serializer supports.
+        // e.g. Imagine if we provided a Map serializer this way, then it won't work if the declared type is AbstractMap, only Map.
+        // Otherwise it needs to inject additional schema for a RestrictedType source of the super type.  Could be done, but do we need it?
         for (customSerializer in customSerializers) {
             if (customSerializer.isSerializerFor(clazz)) {
-                return customSerializer
+                val declaredSuperClass = declaredType.asClass()?.superclass
+                if (declaredSuperClass == null || !customSerializer.isSerializerFor(declaredSuperClass)) {
+                    return customSerializer
+                } else {
+                    // Make a subclass serializer for the subclass and return that...
+                    return CustomSerializer.SubClass<Any>(clazz, customSerializer as CustomSerializer<Any>)
+                }
             }
         }
         return null
@@ -252,7 +342,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
 
         fun nameForType(type: Type): String {
             if (type is Class<*>) {
-                return primitiveTypeName(type) ?: type.name
+                return primitiveTypeName(type) ?: if (type.isArray) "${nameForType(type.componentType)}[]" else type.name
             } else if (type is ParameterizedType) {
                 return "${nameForType(type.rawType)}<${type.actualTypeArguments.joinToString { nameForType(it) }}>"
             } else if (type is GenericArrayType) {

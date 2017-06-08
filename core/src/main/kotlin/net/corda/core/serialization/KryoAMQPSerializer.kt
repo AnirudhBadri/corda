@@ -10,13 +10,19 @@ import net.corda.core.serialization.amqp.SerializerFactory
 
 // TODO: Consider setting the immutable flag
 object KryoAMQPSerializer : Serializer<Any>() {
+    internal fun registerCustomSerializers(factory: SerializerFactory) {
+        factory.apply {
+            register(net.corda.core.serialization.amqp.custom.PublicKeySerializer)
+            register(net.corda.core.serialization.amqp.custom.ThrowableSerializer(this))
+            register(net.corda.core.serialization.amqp.custom.X500NameSerializer)
+            register(net.corda.core.serialization.amqp.custom.BigDecimalSerializer)
+            register(net.corda.core.serialization.amqp.custom.CurrencySerializer)
+        }
+    }
+
     // TODO: need to sort out the whitelist...
     private val serializerFactory = SerializerFactory().apply {
-        register(net.corda.core.serialization.amqp.custom.PublicKeySerializer)
-        register(net.corda.core.serialization.amqp.custom.ThrowableSerializer(this))
-        register(net.corda.core.serialization.amqp.custom.ASN1Serializer)
-        register(net.corda.core.serialization.amqp.custom.BigDecimalSerializer)
-        register(net.corda.core.serialization.amqp.custom.CurrencySerializer)
+        registerCustomSerializers(this)
     }
 
     override fun write(kryo: Kryo, output: Output, `object`: Any) {

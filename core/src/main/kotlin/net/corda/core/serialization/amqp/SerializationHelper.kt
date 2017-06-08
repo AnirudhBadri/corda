@@ -5,6 +5,7 @@ import org.apache.qpid.proton.codec.Data
 import java.beans.Introspector
 import java.io.NotSerializableException
 import java.lang.reflect.*
+import java.util.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
@@ -114,7 +115,6 @@ private fun exploreType(type: Type?, interfaces: MutableSet<Type>) {
         if (clazz.isInterface) interfaces += type!!
         for (newInterface in clazz.genericInterfaces) {
             if (newInterface !in interfaces) {
-                interfaces += newInterface
                 exploreType(resolveTypeVariables(newInterface, type), interfaces)
             }
         }
@@ -176,7 +176,7 @@ fun checkTypeIsResolved(type: Type) {
             checkTypeIsResolved(type.genericComponentType)
         }
     } else if (!type.typeParameters.isEmpty()) {
-        throw NotSerializableException("Generic class with no type variable bound.")
+        //throw NotSerializableException("Generic class with no type variable bound.")
     }
 }
 
@@ -185,5 +185,36 @@ fun Type.asClass(): Class<*>? {
         this
     } else if (this is ParameterizedType) {
         this.rawType.asClass()
+    } else if (this is GenericArrayType) {
+        this.genericComponentType.asClass()?.arrayClass()
     } else null
+}
+
+fun Type.asArray(): Type? {
+    return if (this is Class<*>) {
+        this.arrayClass()
+    } else if (this is ParameterizedType) {
+        DeserializedGenericArrayType(this)
+    } else null
+}
+
+fun Class<*>.arrayClass(): Class<*> = java.lang.reflect.Array.newInstance(this, 0).javaClass
+
+fun Type.isArray(): Boolean = (this is Class<*> && this.isArray) || (this is GenericArrayType)
+
+fun Type.componentType(): Type {
+    check(this.isArray()) { "$this is not an array type." }
+    return (this as? Class<*>)?.componentType ?: (this as GenericArrayType).genericComponentType
+}
+
+fun Class<*>.asParameterizedType(): ParameterizedType {
+    return DeserializedParameterizedType(this, this.typeParameters)
+}
+
+fun Type.asParameterizedType(): ParameterizedType {
+    return when (this) {
+        is Class<*> -> this.asParameterizedType()
+        is ParameterizedType -> this
+        else -> throw NotSerializableException("Don't know how to convert to ParameterizedType")
+    }
 }

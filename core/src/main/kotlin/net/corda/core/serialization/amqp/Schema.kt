@@ -12,6 +12,7 @@ import java.io.NotSerializableException
 import java.lang.reflect.GenericArrayType
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
+import java.lang.reflect.TypeVariable
 
 // TODO: get an assigned number as per AMQP spec
 val DESCRIPTOR_TOP_32BITS: Long = 0xc0da0000
@@ -310,6 +311,7 @@ private val ALREADY_SEEN_HASH: String = "Already seen = true"
 private val NULLABLE_HASH: String = "Nullable = true"
 private val NOT_NULLABLE_HASH: String = "Nullable = false"
 private val ANY_TYPE_HASH: String = "Any type = true"
+private val TYPE_VARIABLE_HASH: String = "Any type = true"
 
 /**
  * The method generates a fingerprint for a given JVM [Type] that should be unique to the schema representation.
@@ -320,10 +322,22 @@ private val ANY_TYPE_HASH: String = "Any type = true"
  * different.
  */
 // TODO: write tests
-internal fun fingerprintForType(type: Type, factory: SerializerFactory): String = Base58.encode(fingerprintForType(type, null, HashSet(), Hashing.murmur3_128().newHasher(), factory).hash().asBytes())
+internal fun fingerprintForType(type: Type, factory: SerializerFactory): String {
+    // TODO: do we need this?
+    //checkTypeIsResolved(type)
+    return Base58.encode(fingerprintForType(type, null, HashSet(), Hashing.murmur3_128().newHasher(), factory).hash().asBytes())
+}
+
+internal fun fingerprintForStrings(vararg typeDescriptors: String): String {
+    val hasher = Hashing.murmur3_128().newHasher()
+    for (typeDescriptor in typeDescriptors) {
+        hasher.putUnencodedChars(typeDescriptor)
+    }
+    return Base58.encode(hasher.hash().asBytes())
+}
 
 private fun fingerprintForType(actualType: Type, contextType: Type?, alreadySeen: MutableSet<Type>, hasher: Hasher, factory: SerializerFactory): Hasher {
-    checkTypeIsResolved(actualType)
+    //checkTypeIsResolved(actualType) Not needed....
     val type = actualType //resolveTypeVariables(actualType, contextType)
     return if (type in alreadySeen) {
         hasher.putUnencodedChars(ALREADY_SEEN_HASH)
@@ -341,7 +355,7 @@ private fun fingerprintForType(actualType: Type, contextType: Type?, alreadySeen
                     hasher.putUnencodedChars(type.name)
                 } else {
                     // Need to check if a custom serializer is applicable
-                    val customSerializer = factory.findCustomSerializer(type)
+                    val customSerializer = factory.findCustomSerializer(type, type)
                     if (customSerializer == null) {
                         if (type.kotlin.objectInstance != null) {
                             // TODO: name collision is too likely for kotlin objects
@@ -365,6 +379,9 @@ private fun fingerprintForType(actualType: Type, contextType: Type?, alreadySeen
             } else if (type is GenericArrayType) {
                 // Hash the element type + some array hash
                 fingerprintForType(type.genericComponentType, contextType, alreadySeen, hasher, factory).putUnencodedChars(ARRAY_HASH)
+            } else if (type is TypeVariable<*>) {
+                // TODO: include bounds
+                hasher.putUnencodedChars(type.name)
             } else {
                 throw NotSerializableException("Don't know how to hash")
             }

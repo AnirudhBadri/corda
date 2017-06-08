@@ -1,9 +1,17 @@
 package net.corda.core.serialization.amqp
 
+import net.corda.core.contracts.Contract
+import net.corda.core.contracts.ContractState
+import net.corda.core.contracts.TransactionForContract
+import net.corda.core.contracts.TransactionState
+import net.corda.core.crypto.SecureHash
 import net.corda.core.flows.FlowException
 import net.corda.core.serialization.CordaSerializable
 import net.corda.core.serialization.EmptyWhitelist
+import net.corda.core.serialization.KryoAMQPSerializer
+import net.corda.core.utilities.CordaRuntimeException
 import net.corda.nodeapi.RPCException
+import net.corda.testing.MEGA_CORP
 import net.corda.testing.MEGA_CORP_PUBKEY
 import org.apache.qpid.proton.codec.DecoderImpl
 import org.apache.qpid.proton.codec.EncoderImpl
@@ -11,7 +19,9 @@ import org.junit.Test
 import java.io.IOException
 import java.io.NotSerializableException
 import java.nio.ByteBuffer
+import java.security.PublicKey
 import java.util.*
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -80,7 +90,11 @@ class SerializationOutputTests {
 
     data class ImplementsGenericString(val bar: Int, override val pub: String) : GenericInterface<String>
 
-    data class ImplementsGenericX<X>(val bar: Int, override val pub: X) : GenericInterface<X>
+    data class ImplementsGenericX<Y>(val bar: Int, override val pub: Y) : GenericInterface<Y>
+
+    abstract class AbstractGenericX<Z> : GenericInterface<Z>
+
+    data class InheritGenericX<A>(val duke: Double, override val pub: A) : AbstractGenericX<A>()
 
     data class CapturesGenericX(val foo: GenericInterface<String>)
 
@@ -107,7 +121,11 @@ class SerializationOutputTests {
 
     data class PolymorphicProperty(val foo: FooInterface?)
 
-    private fun serdes(obj: Any, factory: SerializerFactory = SerializerFactory(), freshDeserializationFactory: SerializerFactory = SerializerFactory(), expectedEqual: Boolean = true): Any {
+    private fun serdes(obj: Any,
+                       factory: SerializerFactory = SerializerFactory(),
+                       freshDeserializationFactory: SerializerFactory = SerializerFactory(),
+                       expectedEqual: Boolean = true,
+                       expectDeserializedEqual: Boolean = true): Any {
         val ser = SerializationOutput(factory)
         val bytes = ser.serialize(obj)
 
@@ -136,7 +154,7 @@ class SerializationOutputTests {
         val des2 = DeserializationInput(factory)
         val desObj2 = des2.deserialize(ser2.serialize(obj))
         assertTrue(Objects.deepEquals(obj, desObj2) == expectedEqual)
-        assertTrue(Objects.deepEquals(desObj, desObj2))
+        assertTrue(Objects.deepEquals(desObj, desObj2) == expectDeserializedEqual)
 
         // TODO: add some schema assertions to check correctly formed.
         return desObj2
@@ -220,7 +238,7 @@ class SerializationOutputTests {
         serdes(obj)
     }
 
-    @Test(expected = NotSerializableException::class)
+    @Test
     fun `test generic foo`() {
         val obj = GenericFoo("Fred", "Ginger")
         serdes(obj)
@@ -255,6 +273,13 @@ class SerializationOutputTests {
     @Test
     fun `test implements generic captured`() {
         val obj = CapturesGenericX(ImplementsGenericX(1, "Ginger"))
+        serdes(obj)
+    }
+
+
+    @Test
+    fun `test inherits generic captured`() {
+        val obj = CapturesGenericX(InheritGenericX(1.0, "Ginger"))
         serdes(obj)
     }
 
@@ -322,8 +347,9 @@ class SerializationOutputTests {
         val factory2 = SerializerFactory()
         factory2.register(net.corda.core.serialization.amqp.custom.ThrowableSerializer(factory2))
 
-        val obj = IllegalAccessException("message").fillInStackTrace()
-        serdes(obj, factory, factory2, false)
+        val t = IllegalAccessException("message").fillInStackTrace() as Throwable
+        val desThrowable = serdes(t, factory, factory2, false) as Throwable
+        assertSerializedThrowableEquivalent(t, desThrowable)
     }
 
     @Test
@@ -341,7 +367,19 @@ class SerializationOutputTests {
                 throw IllegalStateException("Layer 2", t)
             }
         } catch(t: Throwable) {
-            serdes(t, factory, factory2, false)
+            val desThrowable = serdes(t, factory, factory2, false) as Throwable
+            assertSerializedThrowableEquivalent(t, desThrowable)
+        }
+    }
+
+    fun assertSerializedThrowableEquivalent(t: Throwable, desThrowable: Throwable) {
+        assertTrue(desThrowable is CordaRuntimeException) // Since we don't handle the other case(s) yet
+        if (desThrowable is CordaRuntimeException) {
+            assertEquals("${t.javaClass.name}: ${t.message}", desThrowable.message)
+            assertTrue(desThrowable is CordaRuntimeException)
+            assertTrue(Objects.deepEquals(t.stackTrace, desThrowable.stackTrace))
+            assertEquals(t.suppressed.size, desThrowable.suppressed.size)
+            t.suppressed.zip(desThrowable.suppressed).forEach { (before, after) -> assertSerializedThrowableEquivalent(before, after) }
         }
     }
 
@@ -362,7 +400,8 @@ class SerializationOutputTests {
                 throw e
             }
         } catch(t: Throwable) {
-            serdes(t, factory, factory2, false)
+            val desThrowable = serdes(t, factory, factory2, false) as Throwable
+            assertSerializedThrowableEquivalent(t, desThrowable)
         }
     }
 
@@ -405,5 +444,37 @@ class SerializationOutputTests {
     @Test
     fun `test kotlin object`() {
         serdes(KotlinObject)
+    }
+
+    object FooContract : Contract {
+        override fun verify(tx: TransactionForContract) {
+
+        }
+
+        override val legalContractReference: SecureHash = SecureHash.Companion.sha256("FooContractLegal")
+    }
+
+    class FooState : ContractState {
+        override val contract: Contract
+            get() = FooContract
+        override val participants: List<PublicKey>
+            get() = emptyList()
+    }
+
+    @Test
+    fun `test transaction state`() {
+        val state = TransactionState<FooState>(FooState(), MEGA_CORP)
+
+        val factory = SerializerFactory()
+        KryoAMQPSerializer.registerCustomSerializers(factory)
+
+        val factory2 = SerializerFactory()
+        KryoAMQPSerializer.registerCustomSerializers(factory2)
+
+        val desState = serdes(state, factory, factory2, expectedEqual = false, expectDeserializedEqual = false)
+        assertTrue(desState is TransactionState<*>)
+        assertTrue((desState as TransactionState<*>).data is FooState)
+        assertTrue(desState.notary == state.notary)
+        assertTrue(desState.encumbrance == state.encumbrance)
     }
 }
