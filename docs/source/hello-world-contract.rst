@@ -320,7 +320,7 @@ Now that we have defined our IOUContract, let's go back and modify our IOUState 
         class IOUState(val value: Int,
                        val sender: Party,
                        val recipient: Party,
-                       override val contract: IOUContract) : ContractState {
+                       override val contract: IOUContract = IOUContract()) : ContractState {
 
             override val participants get() = listOf(sender, recipient)
         }
