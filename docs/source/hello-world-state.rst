@@ -62,7 +62,11 @@ Let's update the definition of ``TemplateState`` in TemplateState.java or Templa
                        val sender: Party,
                        val recipient: Party,
                        // TODO: Once we've defined IOUContract, come back and update this.
+<<<<<<< HEAD
                        override val contract: TemplateContract = TemplateContract()) : ContractState {
+=======
+                       override val contract: TemplateContract) : ContractState {
+>>>>>>> e06ff2fa5704607c07a0c5a4835b0d63d9184484
 
             override val participants get() = listOf(sender, recipient)
         }
