@@ -7,27 +7,38 @@
 Writing the state
 =================
 
+In Corda, shared facts on the ledger are represented as states. Our first task will be to define a new state type to
+represent an IOU.
+
 The ContractState interface
 ---------------------------
-In Corda, the shared facts on the ledger are represented as states. Every state must implement the ``ContractState``
-interface:
+In Corda, any JVM class that implements the ``ContractState`` interface is a valid state. ``ContractState`` is
+defined as follows:
 
 .. container:: codeset
 
     .. code-block:: kotlin
 
         interface ContractState {
-            // the contract controlling transactions involving this state
+            // The contract controlling transactions involving this state
             val contract: Contract
 
             // The list of entities considered to have a stake in this state
             val participants: List<AbstractParty>
         }
 
-The core Corda platform, including the interface declaration above, is written in Kotlin. However, because Kotlin
-code is compiled down to JVM bytecode, CorDapps written in other JVM languages can interoperate with Corda.
+The first thing you'll probably notice about this interface declaration is that its not written in Java or another
+common language. The core Corda platform, including the interface declaration above, is entirely written in Kotlin.
 
-A quick Kotlin primer:
+Learning some Kotlin will be very useful for understanding how Corda works internally, and usually only takes an
+experienced Java developer a day or so to pick up. However, learning Kotlin isn't essential. Because Kotlin code
+compiles down to JVM bytecode, CorDapps written in other JVM languages can interoperate with Corda.
+
+If you do want to dive into Kotlin, there's an official
+`getting started guide <https://kotlinlang.org/docs/tutorials/>`_, and a series of
+`Kotlin Koans <https://kotlinlang.org/docs/tutorials/koans.html>`_.
+
+If not, here's a quick primer on the Kotlinisms in the declaration of ``ContractState``:
 
 * ``val`` declares a read-only property, similar to Java's ``final`` keyword
 * The syntax ``varName: varType`` declares ``varName`` as being of type ``varType``
@@ -38,21 +49,25 @@ We can see that the ``ContractState`` interface declares two properties:
 * ``participants``: the list of entities that have to approve state changes such as changing the state's notary or
   upgrading the state's contract
 
+Beyond this, our state is free to define any properties, methods, helpers or inner classes it requires to accurately
+represent a given class of shared facts on the ledger.
+
 Modelling IOUs
 --------------
-Let's start defining the ``IOUState`` that will represent IOUs on the ledger. Beyond implementing the ``ContractState``
-interface, our ``IOUState`` will also need properties to track any relevant features of the IOU:
+How should we define the ``IOUState`` representing IOUs on the ledger? Beyond implementing the ``ContractState``
+interface, our ``IOUState`` will also need properties to track the relevant features of the IOU:
 
 * The sender of the IOU
 * The IOU's recipient
 * The value of the IOU
 
-We will abstract away any other details for now, such as the IOU's currency. Adding them is as simple as adding an
-additional property to a Java or Kotlin class.
+There are many more fields you could include, such as the IOU's currency. We'll abstract them away for now. If
+you wish to add them later, its as simple as adding an additional property to your class definition.
 
 Defining IOUState
 -----------------
-Let's update the definition of ``TemplateState`` in TemplateState.java or TemplateState.kt to define an ``IOUState``:
+Let's open TemplateState.java (for Java) or TemplateState.kt (for Kotlin) and update ``TemplateState`` to define an
+``IOUState``:
 
 .. container:: codeset
 
@@ -107,19 +122,25 @@ Let's update the definition of ``TemplateState`` in TemplateState.java or Templa
             }
         }
 
-We've renamed ``TemplateState`` to ``IOUState``, and added properties for ``value``, ``sender`` and ``recipient``
-(along with any getters and setters in Java). ``value`` is just a standard Integer (in Java)/Int (in Kotlin), but
-``sender`` and ``recipient`` are of type ``Party``. ``Party`` is a Corda type that represents an entity on the network.
+We've made the following changes:
 
-In turn, we've defined ``participants`` as the list of the ``sender`` and ``recipient``.
+* We've renamed ``TemplateState`` to ``IOUState``
+* We've added properties for ``value``, ``sender`` and ``recipient`` (along with any getters and setters in Java)
 
-Finally, we've left ``IOUState``'s contract as ``TemplateContract``. We'll update this once we've defined the
+  * ``value`` is just a standard Integer (in Java)/Int (in Kotlin), but ``sender`` and ``recipient`` are of type
+    ``Party``. ``Party`` is a built-in Corda type that represents an entity on the network.
+
+* We've overridden ``participants`` to return a list of the ``sender`` and ``recipient``
+  * This means that actions such as changing the state's contract or its notary will require approval from both the
+    ``sender`` and the ``recipient``
+
+We've left ``IOUState``'s contract as ``TemplateContract`` for now. We'll update this once we've defined the
 ``IOUContract``.
 
 Progress so far
 ---------------
-We now have an ``IOUState`` that can represent IOUs as shared facts on the ledger. As we've seen, shared facts in Corda
-are simply JVM classes that implement the ``ContractState`` interface. From there, you can add any properties and
+We've defined an ``IOUState`` that can be used to represent IOUs as shared facts on the ledger. As we've seen, states in
+Corda are simply JVM classes that implement the ``ContractState`` interface. They can have any additional properties and
 methods you like.
 
-Next, we'll be writing the ``IOUContract`` that controls the evolution of these shared facts over time.
+Next, we'll be writing our ``IOUContract`` to control the evolution of these shared facts over time.

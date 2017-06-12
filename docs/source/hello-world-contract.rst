@@ -7,13 +7,27 @@
 Writing the contract
 ====================
 
+In Corda, the ledger is updated via transactions. Each transaction is a proposal to mark zero or more existing
+states as historic (the inputs), while creating zero or more new states (the outputs).
+
+It's easy to imagine that most CorDapps will want to impose some constraints on how their states evolve over time:
+* A cash CorDapp would not want to allow users to create transactions that generate money out of thin air (at least
+  without the central bank's involvement)
+* A loan CorDapp might not want to allow the creation of negative-valued loans
+* An asset-trading CorDapp would not want to allow users to finalise a trade without the agreement of their counterparty
+
+In Corda, we impose constraints on what transactions are allowed using contracts. These contracts are very different
+to the smart contracts of other distributed ledger platforms. They do not represent the current state of the ledger.
+Instead, like a real-world contract, they simply impose rules on what kinds of agreements are allowed.
+
+Every state is associated with a contract. A transaction is invalid if it does not satisfy the contract of every
+input and output state in the transaction.
+
 The Contract interface
 ----------------------
-In Corda, the ledger is updated through transactions. Each transaction is a proposal to mark zero or more existing
-states as historic (the inputs), and produce zero or more new states (the outputs). One condition for the proposed
-transaction to be valid is that it has to meet the requirements of the contracts of every input and output state.
 
-Every contract has to implement the ``Contract`` interface:
+Just as every Corda state must implement the ``ContractState`` interface, every contract must implement the
+``Contract`` interface:
 
 .. container:: codeset
 
@@ -28,7 +42,7 @@ Every contract has to implement the ``Contract`` interface:
             val legalContractReference: SecureHash
         }
 
-Another quick Kotlin primer:
+A few more Kotlinisms here:
 
 * ``fun`` declares a function
 * The syntax ``fun funName(arg1Name: arg1Type): returnType`` declares that ``funName`` takes an argument of type
@@ -43,37 +57,41 @@ We can see that ``Contract`` expresses its constraints in two ways:
 
 Controlling IOU evolution
 -------------------------
-What would a valid contract for an ``IOUState`` look like? For our CorDapp, we only want to allow the creation of
-IOUs, rather than their transfer or redemption. We can enforce this behaviour by imposing the following constraints:
+What would a good contract for an ``IOUState`` look like? There is no right or wrong answer - it depends on how you
+want your CorDapp to behave.
 
-* An IOU transaction should consume zero inputs, and create one output of type ``IOUState``
-* The transaction should also include a ``Create`` command, indicating the transaction's intent
-* For the output IOU state:
+For our CorDapp, let's impose the constraint that we only want to allow the creation of IOUs. We don't want nodes to
+transfer them or redeem them for cash. One way to enforce this behaviour would be by imposing the following constraints:
+
+* A transaction involving IOUs must consume zero inputs, and create one output of type ``IOUState``
+* The transaction should also include a ``Create`` command, indicating the transaction's intent (more on commands
+  shortly)
+* For the transactions's output IOU state:
 
   * Its value must be non-negative
   * Its sender and its recipient cannot be the same entity
-  * All of its participants (i.e. both the sender and the recipient) must be signers on the transaction
+  * All the participants (i.e. both the sender and the recipient) must sign the transaction
+
+Let's write a contract that enforces these constraints.
 
 Defining IOUContract
 --------------------
 
 The Create command
 ^^^^^^^^^^^^^^^^^^
-Let's start defining our contract. The first thing we would like to do is add a *command*. Commands allow us to
-achieve two things:
+The first thing our contract needs is a *command*. Commands serve two purposes:
 
-* Fork the execution of ``verify``, allowing us to perform different types of verification on transactions with
-  different intents
+* They indicate the transaction's intent, allowing us to perform different verification given the situation
 
-  * For example, a transaction proposing the creation of an IOU will have to satisfy different constraints to one
-    proposing the redemption of an IOU
+  * For example, a transaction proposing the creation of an IOU could have to satisfy different constraints to one
+    redeeming an IOU
 
-* Attach required signers to the transaction
+* They allow us to define the required signers for the transaction
 
-  * In the case of IOU creation, we're going to impose the constraint that both the sender and the recipient must
-    sign. An IOU transfer might instead require a transaction from the current holder of the IOU only
+  * For example, IOU creation might require signatures from both the sender and the recipient, whereas the transfer
+    of an IOU might only require a signature from the IOUs current holder
 
-Let's update the definition of ``TemplateContract`` in TemplateContract.java or TemplateContract.kt to define an
+Let's update the definition of ``TemplateContract`` (in TemplateContract.java/TemplateContract.kt) to define an
 ``IOUContract`` with a ``Create`` command:
 
 .. container:: codeset
@@ -88,7 +106,7 @@ Let's update the definition of ``TemplateContract`` in TemplateContract.java or 
             class Create : CommandData
 
             // The legal contract reference - we'll leave this as a dummy hash for now.
-            override val legalContractReference: SecureHash = SecureHash.sha256("Prose contract.")
+            override val legalContractReference = SecureHash.sha256("Prose contract.")
         }
 
     .. code-block:: java
@@ -106,11 +124,11 @@ Let's update the definition of ``TemplateContract`` in TemplateContract.java or 
             @Override public final SecureHash getLegalContractReference() { return legalContractReference; }
         }
 
-Firstly, we've renamed ``TemplateContract`` to ``IOUContract``.
+Aside from renaming ``TemplateContract`` to ``IOUContract``, we've also implemented the ``Create`` command. All
+commands must implement the ``CommandData`` interface.
 
-We've also implemented the ``Create`` command. The command takes the form of a class that implements the
-``CommandData`` interface. The ``CommandData`` interface is a very simple marker interface for commands. In fact, its
-declaration is only two words long (in Kotlin, marker interfaces do not require a body):
+The ``CommandData`` interface is a simple marker interface for commands. In fact, its declaration is only two words
+long (in Kotlin, interfaces do not require a body):
 
 .. container:: codeset
 
@@ -120,32 +138,32 @@ declaration is only two words long (in Kotlin, marker interfaces do not require 
 
 The verify logic
 ^^^^^^^^^^^^^^^^
-For our IOU CorDapp, we won't concern ourselves with writing valid legal prose to enforce the IOU agreement in court.
-Instead, we'll focus on the code portion of the ``IOUContract`` in ``verify``.
+We now need to define the actual contract constraints. For our IOU CorDapp, we won't concern ourselves with writing
+valid legal prose to enforce the IOU agreement in court. Instead, we'll focus on implementing ``verify``.
 
-Our goal in writing the ``verify`` function is to write a function that, for any possible transaction:
+Remember that our goal in writing the ``verify`` function is to write a function that, given a transaction:
 
-* Throws an ``IllegalArgumentException`` if its a transaction proposal we want to reject
-* Does **not** throw an exception if its a transaction proposal we want to accept
+* Throws an ``IllegalArgumentException`` if the transaction is considered invalid
+* Does **not** throw an exception if the transaction is considered valid
 
-In deciding whether to throw an exception, the ``verify`` function has access to everything defined on the
-transaction, but nothing else:
+In deciding whether the transaction is valid, the ``verify`` function only has access to the contents of the
+transaction:
 
-* ``tx.inputs`` lists the inputs
-* ``tx.outputs`` lists the outputs
-* ``tx.commands`` lists the commands and their associated signers
+* ``tx.inputs``, which lists the inputs
+* ``tx.outputs``, which lists the outputs
+* ``tx.commands``, which lists the commands and their associated signers
 
-Although we won't use them here, the ``verify`` function also has access to the transaction's attachements,
+Although we won't use them here, the ``verify`` function also has access to the transaction's attachments,
 time-windows, notary and hash.
 
-Our ``verify`` function will reject transactions on four grounds:
+Based on the constraints enumerated above, we'll write a ``verify`` function that rejects transactions on four grounds:
 
 * The transaction doesn't include a ``Create`` command
 * The transaction doesn't have no inputs and a single output
 * The IOU itself is invalid
 * The transaction doesn't require signatures from both the sender and the recipient
 
-Let's add these constraints one by one.
+Let's work through these constraints one-by-one.
 
 Command constraints
 ~~~~~~~~~~~~~~~~~~~
@@ -166,12 +184,18 @@ To test for the presence of the ``Create`` command, we can use Corda's ``require
             final AuthenticatedObject<Create> command = requireSingleCommand(tx.getCommands(), Create.class);
         }
 
-Here, ``requireSingleCommand`` is reaching into the transaction's commands, asserting that there is exactly one
-``Create`` command in the transaction, and returning the command in question.
+Here, ``requireSingleCommand`` performing a dual purpose:
+
+* It's asserting that there is exactly one ``Create`` command in the transaction
+* It's extracting the command and returning it
+
+If the ``Create`` command isn't present, or if the transaction has multiple ``Create`` commands, contract
+verification will fail.
 
 Transaction constraints
 ~~~~~~~~~~~~~~~~~~~~~~~
-We want no inputs and only a single output to our transaction. One way to impose this constraint is as follows:
+We also wanted our transaction to have no inputs and only a single output. One way to impose this constraint is as
+follows:
 
 .. container:: codeset
 
@@ -202,18 +226,21 @@ We want no inputs and only a single output to our transaction. One way to impose
             });
         }
 
-Here, we're using Corda's ``requireThat`` function. ``requireThat`` provides a terse way to throw an exception if a
-given condition is not true. If the condition on the right-hand side does not evaluate to true, and
-``IllegalArgumentException`` is thrown with the message on the left-hand side.
+Note the use of Corda's built-in ``requireThat`` function. ``requireThat`` provides a terse way to write the following:
+
+* If the condition on the right-hand side doesn't evaluate to true...
+* ...throw an ``IllegalArgumentException`` with the message on the left-hand side
+
+As before, the act of throwing this exception would cause transaction verification to fail.
 
 IOU constraints
 ~~~~~~~~~~~~~~~
-We're imposing two constraints on the ``IOUState`` itself:
+We want to impose two constraints on the ``IOUState`` itself:
 
 * Its value must be non-negative
 * Its sender and its recipient cannot be the same entity
 
-We can impose these constraints in the same ``requireThat`` function as before:
+We can impose these constraints in the same ``requireThat`` block as before:
 
 .. container:: codeset
 
@@ -254,14 +281,14 @@ We can impose these constraints in the same ``requireThat`` function as before:
             }
         }
 
-You can see that we're not restricted to writing constraints in the ``requireThat`` block. We can also write standard
-statements - in this case, extracting the transaction's single ``IOUState``.
+You can see that we're not restricted to only writing constraints in the ``requireThat`` block. We can also write
+other statements - in this case, we're extracting the transaction's single ``IOUState`` and assigning it to a variable.
 
 Signer constraints
 ~~~~~~~~~~~~~~~~~~
-Our final constraint is that the transaction must have both the IOU's sender and recipient as required signers. A
-transaction's signers are listed on the commands, so we extract them from the ``Create`` command we
-retrieved earlier.
+Our final constraint is that the IOU's sender and recipient must both be required signers on the transaction. A
+transaction's required signers is equal to the union of all the signers listed on the commands. We can therefore
+extract the signers from the ``Create`` command we retrieved earlier.
 
 .. container:: codeset
 
@@ -311,7 +338,12 @@ retrieved earlier.
             });
         }
 
-Now that we have defined our IOUContract, let's go back and modify our IOUState to point to this new contract:
+Checkpoint
+----------
+We've now defined the full contract logic of our ``IOUContract``. This contract means that transactions involving
+``IOUState`` states will have to fulfill strict constraints to become valid ledger updates.
+
+Before we move on, let's go back and modify ``IOUState`` to point to the new ``IOUContract``:
 
 .. container:: codeset
 
@@ -365,13 +397,16 @@ Now that we have defined our IOUContract, let's go back and modify our IOUState 
 
 Transaction tests
 -----------------
-Before moving on, let's set up some tests to ensure that the ``IOUContract`` is providing the right controls on the
-evolution of each ``IOUState``.
+How can we ensure that we've defined our contract constraints correctly?
 
-We'll be writing these tests using Corda's ``ledgerDSL`` transaction-testing framework. This will allow us to test
-our contract without the overhead of spinning up a node.
+One option would be to deploy the CorDapp onto a set of nodes, and test it manually. However, this is a relatively
+slow process, and would take on the order of minutes to test each change.
 
-Here's our first test:
+Instead, we can test our contract logic using Corda's ``ledgerDSL`` transaction-testing framework. This will allow us
+to test our contract without the overhead of spinning up a set of nodes.
+
+Open either test/kotlin/com/template/contract/ContractTests.kt or test/java/com/template/contract/ContractTests.java
+(depending on which language you're developing in), and add the following as our first test:
 
 .. container:: codeset
 
@@ -418,15 +453,18 @@ Here's our first test:
             }
         }
 
-Here, we're using ``ledgerDSL`` to create a fake transaction. We can add inputs, outputs, commands, etc. to the
-transaction using the DSL's ``output``, ``input`` and ``command`` methods. At any point, we can assert that the
-transaction so far is either contractually valid (using ``verifies``) or contractually invalid (using ``fails``).
+This test uses Corda's built-in ``ledgerDSL`` to:
+* Create a fake transaction.
+* Add inputs, outputs, commands, etc. (using the DSL's ``output``, ``input`` and ``command`` methods)
+* At any point, asserting that the transaction built so far is either contractually valid (by calling ``verifies``) or
+  contractually invalid (by calling ``fails``).
 
 In this instance:
 
-* We initially create a transaction with an output but no command. We assert that this transaction fails contract
-verification (since the ``Create`` command is missing)
-* We then add the ``Create`` command, and assert that contract verification now succeeds
+* We initially create a transaction with an output but no command
+* We assert that this transaction is invalid (since the ``Create`` command is missing)
+* We then add the ``Create`` command
+* We assert that transaction is now valid
 
 Here is the full set of tests we'll be using to test the ``IOUContract``:
 
@@ -629,14 +667,17 @@ Here is the full set of tests we'll be using to test the ``IOUContract``:
             }
         }
 
-Take a moment to run these tests to ensure that the ``IOUState`` and ``IOUContract`` are running fine.
+Copy these tests into the ContractTests file, and run them to ensure that the ``IOUState`` and ``IOUContract`` we've
+developed up until this point are running ok. All the tests should pass.
 
 Progress so far
 ---------------
-We've now written an ``IOUContract`` constraining the evolution of each ``IOUState`` over time. Now, an ``IOUState``
-can only be created on the ledger, not transferred or redeemed. Creating an ``IOUState`` requires an issuance
-transaction with no inputs, a single ``IOUState`` output, and a ``Create`` command. And the ``IOUState`` created by
-the issuance transaction must have a non-negative value, and its sender and recipient must be separate entities.
+We've now written an ``IOUContract`` constraining the evolution of the individual ``IOUState``s over time:
+* An ``IOUState`` can only be created, not transferred or redeemed
+* Creating an ``IOUState`` requires an issuance transaction with no inputs, a single ``IOUState`` output, and a
+  ``Create`` command
+* The ``IOUState`` created by the issuance transaction must have a non-negative value, and its sender and recipient
+  must be different entities.
 
-The final step in the creation of our CorDapp will be to write the ``IOUFlow`` that will allow two node to agree the
-creation of a new ``IOUState``on the ledger, without informing the rest of the network.
+The final step in the creation of our CorDapp will be to write the ``IOUFlow`` that will allow nodes to orchestrate
+the creation of new ``IOUState``s on the ledger, while only sharing information on a need-to-know basis.
