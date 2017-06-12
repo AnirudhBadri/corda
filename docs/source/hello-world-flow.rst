@@ -7,7 +7,6 @@
 Writing the flow
 ================
 
-<<<<<<< HEAD
 FlowLogic
 ---------
 A flow describes the sequence of steps for agreeing a specific ledger update. By installing new flows on our node, we
@@ -617,6 +616,3 @@ We now have a complete CorDapp, made up of:
 * The ``IOUFlow``, allowing us to orchestrate the agreement of a new IOU
 
 The final step is to spin up some nodes and test our CorDapp.
-=======
-TODO
->>>>>>> e06ff2fa5704607c07a0c5a4835b0d63d9184484
