@@ -14,13 +14,12 @@ import net.corda.core.crypto.X509Utilities
 import net.corda.core.crypto.appendToCommonName
 import net.corda.core.crypto.commonName
 import net.corda.core.identity.Party
-import net.corda.core.identity.PartyAndCertificate
 import net.corda.core.messaging.CordaRPCOps
 import net.corda.core.node.NodeInfo
 import net.corda.core.node.services.ServiceInfo
 import net.corda.core.node.services.ServiceType
 import net.corda.core.utilities.*
-import net.corda.node.LOGS_DIRECTORY_NAME
+import net.corda.node.internal.NodeStartup
 import net.corda.node.services.config.*
 import net.corda.node.services.network.NetworkMapService
 import net.corda.node.services.transactions.RaftValidatingNotaryService
@@ -699,7 +698,7 @@ class DriverDSL(
                         ),
                         jdwpPort = debugPort,
                         extraJvmArguments = extraJvmArguments,
-                        errorLogPath = nodeConf.baseDirectory / LOGS_DIRECTORY_NAME / "error.log",
+                        errorLogPath = nodeConf.baseDirectory / NodeStartup.LOGS_DIRECTORY_NAME / "error.log",
                         workingDirectory = nodeConf.baseDirectory
                 )
             }
