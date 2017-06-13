@@ -69,6 +69,7 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.KeyPair
+import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.cert.X509Certificate
 import java.time.Clock
@@ -214,7 +215,8 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
 
         // Do all of this in a database transaction so anything that might need a connection has one.
         initialiseDatabasePersistence {
-            val tokenizableServices = makeServices()
+            val keyStoreWrapper = KeyStoreWrapper(configuration.trustStoreFile, configuration.trustStorePassword)
+            val tokenizableServices = makeServices(keyStoreWrapper)
 
             smm = StateMachineManager(services,
                     checkpointStorage,
@@ -437,7 +439,8 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
      * Builds node internal, advertised, and plugin services.
      * Returns a list of tokenizable services to be added to the serialisation context.
      */
-    private fun makeServices(): MutableList<Any> {
+    private fun makeServices(keyStoreWrapper: KeyStoreWrapper): MutableList<Any> {
+        val keyStore = keyStoreWrapper.keyStore
         val storageServices = initialiseStorageService(configuration.baseDirectory)
         storage = storageServices.first
         checkpointStorage = storageServices.second
@@ -449,7 +452,8 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
         auditService = DummyAuditService()
 
         info = makeInfo()
-        identity = makeIdentityService()
+        identity = makeIdentityService(keyStore.getCertificate(X509Utilities.CORDA_ROOT_CA)!! as X509Certificate,
+                keyStoreWrapper.certificateAndKeyPair(X509Utilities.CORDA_CLIENT_CA))
         // Place the long term identity key in the KMS. Eventually, this is likely going to be separated again because
         // the KMS is meant for derived temporary keys used in transactions, and we're not supposed to sign things with
         // the identity key. But the infrastructure to make that easy isn't here yet.
@@ -683,10 +687,8 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
 
     protected abstract fun makeUniquenessProvider(type: ServiceType): UniquenessProvider
 
-    protected open fun makeIdentityService(): IdentityService {
-        val keyStore = KeyStoreUtilities.loadKeyStore(configuration.trustStoreFile, configuration.trustStorePassword)
-        val trustRoot = keyStore.getCertificate(X509Utilities.CORDA_ROOT_CA) as? X509Certificate
-        val service = InMemoryIdentityService(setOf(info.legalIdentityAndCert), trustRoot = trustRoot)
+    protected open fun makeIdentityService(trustRoot: X509Certificate, clientCa: CertificateAndKeyPair?): IdentityService {
+        val service = InMemoryIdentityService(setOf(info.legalIdentityAndCert), trustRootParsed = trustRoot, clientCaCert = clientCa?.certificate)
         services.networkMapCache.partyNodes.forEach { service.registerIdentity(it.legalIdentityAndCert) }
         netMapCache.changed.subscribe { mapChange ->
             // TODO how should we handle network map removal
@@ -782,12 +784,13 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
             }
             Pair(myIdentity, keyPair)
         } else {
+            val rootCA = keyStore.certificateAndKeyPair(X509Utilities.CORDA_CLIENT_CA)!!
             val clientCA = keyStore.certificateAndKeyPair(X509Utilities.CORDA_CLIENT_CA)!!
             // Create new keys and store in keystore.
             log.info("Identity key not found, generating fresh key!")
             val keyPair: KeyPair = generateKeyPair()
             val cert = X509Utilities.createCertificate(CertificateType.IDENTITY, clientCA.certificate, clientCA.keyPair, serviceName, keyPair.public)
-            val certPath = X509Utilities.createCertificatePath(cert, cert, revocationEnabled = false)
+            val certPath = X509Utilities.createCertificatePath(rootCA.certificate, cert, revocationEnabled = false)
             keyStore.save(serviceName, privateKeyAlias, keyPair)
             require(certPath.certificates.isNotEmpty()) { "Certificate path cannot be empty" }
             Pair(PartyAndCertificate(serviceName, keyPair.public, cert, certPath), keyPair)
@@ -812,8 +815,8 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
     }
 }
 
-private class KeyStoreWrapper(private val storePath: Path, private val storePassword: String) {
-    private val keyStore = KeyStoreUtilities.loadKeyStore(storePath, storePassword)
+class KeyStoreWrapper(val keyStore: KeyStore, val storePath: Path, private val storePassword: String) {
+    constructor(storePath: Path, storePassword: String) : this(KeyStoreUtilities.loadKeyStore(storePath, storePassword), storePath, storePassword)
 
     fun certificateAndKeyPair(alias: String): CertificateAndKeyPair? {
         return if (keyStore.containsAlias(alias)) keyStore.getCertificateAndKeyPair(alias, storePassword) else null

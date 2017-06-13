@@ -30,15 +30,16 @@ import java.util.*
  */
 fun freshCertificate(identityService: IdentityService,
                      subjectPublicKey: PublicKey,
-                     issuer: PartyAndCertificate,
                      issuerSigner: ContentSigner,
-                     revocationEnabled: Boolean = false): Pair<X509CertificateHolder, CertPath> {
+                     revocationEnabled: Boolean = false,
+                     issuer: PartyAndCertificate,
+                     vararg intermediaryCerts: X509CertificateHolder = emptyArray()): Pair<X509CertificateHolder, CertPath> {
     val issuerCertificate = issuer.certificate
     val window = X509Utilities.getCertificateValidityWindow(Duration.ZERO, Duration.ofDays(10 * 365), issuerCertificate)
     val ourCertificate = Crypto.createCertificate(CertificateType.IDENTITY, issuerCertificate.subject, issuerSigner, issuer.name, subjectPublicKey, window)
     val actualPublicKey = Crypto.toSupportedPublicKey(ourCertificate.subjectPublicKeyInfo)
     require(subjectPublicKey == actualPublicKey)
-    val ourCertPath = X509Utilities.createCertificatePath(issuerCertificate, ourCertificate, revocationEnabled = revocationEnabled)
+    val ourCertPath = X509Utilities.createCertificatePath(identityService.trustRoot, issuerCertificate, *intermediaryCerts, ourCertificate, revocationEnabled = revocationEnabled)
     require(Arrays.equals(ourCertificate.subjectPublicKeyInfo.encoded, subjectPublicKey.encoded))
     identityService.registerAnonymousIdentity(AnonymousParty(subjectPublicKey),
             issuer.party,

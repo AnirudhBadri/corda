@@ -139,8 +139,7 @@ object X509Utilities {
      */
     fun createCertificatePath(trustedRoot: X509CertificateHolder, vararg certificates: X509CertificateHolder, revocationEnabled: Boolean): CertPath {
         val certFactory = CertificateFactory.getInstance("X509")
-        val trustedRootX509 = certFactory.generateCertificate(ByteArrayInputStream(trustedRoot.encoded)) as X509Certificate
-        val params = PKIXParameters(setOf(TrustAnchor(trustedRootX509, null)))
+        val params = PKIXParameters(setOf(TrustAnchor(trustedRoot.cert, null)))
         params.isRevocationEnabled = revocationEnabled
         return certFactory.generateCertPath(certificates.map { certFactory.generateCertificate(ByteArrayInputStream(it.encoded)) }.toList())
     }

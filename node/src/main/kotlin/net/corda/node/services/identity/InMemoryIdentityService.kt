@@ -32,15 +32,14 @@ import kotlin.collections.ArrayList
 @ThreadSafe
 class InMemoryIdentityService(identities: Iterable<PartyAndCertificate>,
                               certPaths: Map<AnonymousParty, CertPath> = emptyMap(),
-                              val trustRoot: X509Certificate?) : SingletonSerializeAsToken(), IdentityService {
-    constructor(identities: Iterable<PartyAndCertificate> = emptySet(),
-                certPaths: Map<AnonymousParty, CertPath> = emptyMap(),
-                trustRoot: X509CertificateHolder?) : this(identities, certPaths, trustRoot?.cert)
+                              val trustRootParsed: X509Certificate,
+                              override val clientCaCert: X509CertificateHolder? = null) : SingletonSerializeAsToken(), IdentityService {
     companion object {
         private val log = loggerFor<InMemoryIdentityService>()
     }
 
-    private val trustAnchor: TrustAnchor? = trustRoot?.let { cert -> TrustAnchor(cert, null) }
+    override val trustRoot = X509CertificateHolder(trustRootParsed.encoded)
+    private val trustAnchor: TrustAnchor? = trustRootParsed.let { cert -> TrustAnchor(cert, null) }
     private val keyToParties = ConcurrentHashMap<PublicKey, PartyAndCertificate>()
     private val principalToParties = ConcurrentHashMap<X500Name, PartyAndCertificate>()
     private val partyToPath = ConcurrentHashMap<AbstractParty, CertPath>()
