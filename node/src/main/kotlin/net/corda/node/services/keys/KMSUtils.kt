@@ -35,7 +35,8 @@ fun freshCertificate(identityService: IdentityService,
     val ourCertificate = Crypto.createCertificate(CertificateType.IDENTITY, issuerCertificate.subject, issuerSigner, issuer.name, subjectPublicKey, window)
     val actualPublicKey = Crypto.toSupportedPublicKey(ourCertificate.subjectPublicKeyInfo)
     require(subjectPublicKey == actualPublicKey)
-    val ourCertPath = X509Utilities.createCertificatePath(identityService.trustRoot, identityService.caCertStore, ourCertificate.cert, revocationEnabled = revocationEnabled)
+    val ourCertPath = X509Utilities.createCertificatePath(identityService.trustRoot, identityService.caCertStore, ourCertificate.cert
+            , revocationEnabled = revocationEnabled)
     require(Arrays.equals(ourCertificate.subjectPublicKeyInfo.encoded, subjectPublicKey.encoded))
     identityService.registerAnonymousIdentity(AnonymousParty(subjectPublicKey),
             issuer.party,

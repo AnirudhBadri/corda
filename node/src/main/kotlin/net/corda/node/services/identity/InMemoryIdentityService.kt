@@ -49,8 +49,8 @@ class InMemoryIdentityService(identities: Iterable<PartyAndCertificate> = emptyS
     private val partyToPath = ConcurrentHashMap<AbstractParty, CertPath>()
 
     init {
-        val caCertificates: Set<X509Certificate> = caCertificates.toSet() + trustRoot
-        caCertStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(caCertificates))
+        val caCertificatesWithRoot: Set<X509Certificate> = caCertificates.toSet() + trustRoot
+        caCertStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(caCertificatesWithRoot))
         keyToParties.putAll(identities.associateBy { it.owningKey } )
         principalToParties.putAll(identities.associateBy { it.name })
         partyToPath.putAll(certPaths)
