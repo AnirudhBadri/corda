@@ -1,9 +1,6 @@
 package net.corda.core.serialization.amqp
 
-import net.corda.core.contracts.Contract
-import net.corda.core.contracts.ContractState
-import net.corda.core.contracts.TransactionForContract
-import net.corda.core.contracts.TransactionState
+import net.corda.core.contracts.*
 import net.corda.core.crypto.SecureHash
 import net.corda.core.flows.FlowException
 import net.corda.core.serialization.CordaSerializable
@@ -18,8 +15,10 @@ import org.apache.qpid.proton.codec.EncoderImpl
 import org.junit.Test
 import java.io.IOException
 import java.io.NotSerializableException
+import java.math.BigDecimal
 import java.nio.ByteBuffer
 import java.security.PublicKey
+import java.time.Instant
 import java.util.*
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -476,5 +475,53 @@ class SerializationOutputTests {
         assertTrue((desState as TransactionState<*>).data is FooState)
         assertTrue(desState.notary == state.notary)
         assertTrue(desState.encumbrance == state.encumbrance)
+    }
+
+    @Test
+    fun `test currencies serialize`() {
+        val factory = SerializerFactory()
+        factory.register(net.corda.core.serialization.amqp.custom.CurrencySerializer)
+
+        val factory2 = SerializerFactory()
+        factory2.register(net.corda.core.serialization.amqp.custom.CurrencySerializer)
+
+        val obj = Currency.getInstance("USD")
+        serdes(obj, factory, factory2)
+    }
+
+    @Test
+    fun `test big decimals serialize`() {
+        val factory = SerializerFactory()
+        factory.register(net.corda.core.serialization.amqp.custom.BigDecimalSerializer)
+
+        val factory2 = SerializerFactory()
+        factory2.register(net.corda.core.serialization.amqp.custom.BigDecimalSerializer)
+
+        val obj = BigDecimal("100000000000000000000000000000.00")
+        serdes(obj, factory, factory2)
+    }
+
+    @Test
+    fun `test instants serialize`() {
+        val factory = SerializerFactory()
+        factory.register(net.corda.core.serialization.amqp.custom.InstantSerializer(factory))
+
+        val factory2 = SerializerFactory()
+        factory2.register(net.corda.core.serialization.amqp.custom.InstantSerializer(factory2))
+
+        val obj = Instant.now()
+        serdes(obj, factory, factory2)
+    }
+
+    @Test
+    fun `test StateRef serialize`() {
+        val factory = SerializerFactory()
+        factory.register(net.corda.core.serialization.amqp.custom.InstantSerializer(factory))
+
+        val factory2 = SerializerFactory()
+        factory2.register(net.corda.core.serialization.amqp.custom.InstantSerializer(factory2))
+
+        val obj = StateRef(SecureHash.randomSHA256(), 0)
+        serdes(obj, factory, factory2)
     }
 }

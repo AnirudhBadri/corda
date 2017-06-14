@@ -25,7 +25,7 @@ fun makeNoWhitelistClassResolver(): ClassResolver {
     return CordaClassResolver(AllWhitelist)
 }
 
-class CordaClassResolver(val whitelist: ClassWhitelist) : DefaultClassResolver() {
+class CordaClassResolver(val whitelist: ClassWhitelist, val amqpEnabled: Boolean = false) : DefaultClassResolver() {
     /** Returns the registration for the specified class, or null if the class is not registered.  */
     override fun getRegistration(type: Class<*>): Registration? {
         return super.getRegistration(type) ?: checkClass(type)
@@ -64,7 +64,7 @@ class CordaClassResolver(val whitelist: ClassWhitelist) : DefaultClassResolver()
 
     override fun registerImplicit(type: Class<*>): Registration {
         val hasAnnotation = checkForAnnotation(type)
-        if (!hasAnnotation) {
+        if (!hasAnnotation || !amqpEnabled) {
             // We have to set reference to true, since the flag influences how String fields are treated and we want it to be consistent.
             val references = kryo.references
             try {

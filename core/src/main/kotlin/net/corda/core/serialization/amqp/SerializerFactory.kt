@@ -35,6 +35,11 @@ import javax.annotation.concurrent.ThreadSafe
 // TODO: allow definition of well known types that are left out of the schema.
 // TODO: generally map Object to '*' all over the place in the schema
 // TODO: found a document that states textual descriptors are Symbols.  Adjust schema class appropriately.
+// TODO: document and alert to the fact that classes cannot default superclass/interface properties otherwise they are "erased" due to matching with constructor.
+// TODO: type name prefixes for interfaces and abstract classes?  Or use label?
+// TODO: generic types should define restricted type alias with source of the wildcarded version, I think, if we're to generate classes from schema
+// TODO: need to rethink matching of constructor to properties in relation to implementing interfaces and needing those properties etc.
+// TODO: need to support super classes as well as interfaces with our current code base... what's involved?  If we continue to ban, what is the impact?
 @ThreadSafe
 class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
     private val serializersByType = ConcurrentHashMap<Type, AMQPSerializer<Any>>()
@@ -63,39 +68,7 @@ class SerializerFactory(val whitelist: ClassWhitelist = AllWhitelist) {
             } else {
                 return makeClassSerializer(actualClass ?: declaredClass, actualType, declaredType)
             }
-        }
-        /*
-        // TODO: I think these if's are nested the wrong way around now...
-        if (declaredType is ParameterizedType) {
-            return serializersByType.computeIfAbsent(declaredType) {
-                // We allow only Collection and Map.
-                if (declaredClass != null) {
-                    //checkParameterisedTypesConcrete(declaredType.actualTypeArguments)
-                    if (Collection::class.java.isAssignableFrom(declaredClass)) {
-                        CollectionSerializer(declaredType, this)
-                    } else if (Map::class.java.isAssignableFrom(declaredClass)) {
-                        makeMapSerializer(declaredType)
-                    } else {
-                        //throw NotSerializableException("Declared types of $declaredType are not supported.")
-                        val actualType: ParameterizedType? = reverseOutTypeVariables(actualClass, declaredClass, declaredType)
-                        makeGenericClassSerializer(actualType ?: declaredType)
-                    }
-                } else {
-                    throw NotSerializableException("Declared types of $declaredType are not supported.")
-                }
-            }
-        } else if (declaredType is Class<*>) {
-            // Simple classes allowed
-            if (Collection::class.java.isAssignableFrom(declaredType)) {
-                return serializersByType.computeIfAbsent(declaredType) { CollectionSerializer(DeserializedParameterizedType(declaredType, arrayOf(AnyType), null), this) }
-            } else if (Map::class.java.isAssignableFrom(declaredType)) {
-                return serializersByType.computeIfAbsent(declaredType) { makeMapSerializer(DeserializedParameterizedType(declaredType, arrayOf(AnyType, AnyType), null)) }
-            } else {
-                return makeClassSerializer(actualClass ?: declaredType)
-            }
-        } else if (declaredType is GenericArrayType) {
-            return serializersByType.computeIfAbsent(declaredType) { ArraySerializer(declaredType, this) }
-        }*/ else {
+        } else {
             throw NotSerializableException("Declared types of $declaredType are not supported.")
         }
     }

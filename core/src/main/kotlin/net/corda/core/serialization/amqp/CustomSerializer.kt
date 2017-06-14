@@ -53,7 +53,7 @@ abstract class CustomSerializer<T> : AMQPSerializer<T> {
         }
 
         override fun readObject(obj: Any, schema: Schema, input: DeserializationInput): T {
-            return superClassSerializer.readObject(obj, schema, input) as T
+            return superClassSerializer.readObject(obj, schema, input)
         }
     }
 

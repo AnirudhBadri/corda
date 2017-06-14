@@ -17,6 +17,7 @@ object KryoAMQPSerializer : Serializer<Any>() {
             register(net.corda.core.serialization.amqp.custom.X500NameSerializer)
             register(net.corda.core.serialization.amqp.custom.BigDecimalSerializer)
             register(net.corda.core.serialization.amqp.custom.CurrencySerializer)
+            register(net.corda.core.serialization.amqp.custom.InstantSerializer(this))
         }
     }
 
