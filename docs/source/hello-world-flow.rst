@@ -6,15 +6,20 @@
 
 Writing the flow
 ================
-
-FlowLogic
----------
 A flow describes the sequence of steps for agreeing a specific ledger update. By installing new flows on our node, we
 allow the node to handle new business processes.
 
-Each flow is a ``FlowLogic`` instance, with the logic of the flow described by overriding ``FlowLogic.call``. Flows are
-often registered to communicate in pairs. In our case, we'll have two flows - one called `Initiator`, to be run by
-the sender of the IOU, and one called `Acceptor`, to be run by the recipient:
+We'll have to define two flows to issue an ``IOUState`` onto the ledger:
+* One to be run by the node initiating the creation of the IOU
+* One to be run by the node responding to an IOU creation request
+
+FlowLogic
+---------
+Each flow is implemented as a ``FlowLogic`` subclass. You define the steps taken by the flow by overriding
+``FlowLogic.call``.
+
+We will define two ``FlowLogic`` instances communicating as a pair. The first will be called ``Initiator``, and will
+be run by the sender of the IOU. The other will be called ``Acceptor``, and will be run by the recipient:
 
 .. container:: codeset
 
@@ -84,55 +89,50 @@ We can see that we have two ``FlowLogic`` subclasses, each overriding ``FlowLogi
 
 * ``FlowLogic.call`` has a return type that matches the generic passed to ``FlowLogic`` - this is the return type of
   running the flow
-* The ``FlowLogic`` subclasses may have constructor parameters. These can be used to modify the behaviour of the rest
-  of the flow
-* ``FlowLogic.call`` is annotated ``@Suspendable`` - this allows the flow to be checkpointed to disk when it
-  encounters a long-running operation, allowing your node to continue running other flows. Leaving this annotation
-  out will lead to some very weird error messages indeed.
-* We can also see a few more annotations, on the ``FlowLogic`` subclasses themselves:
+* The ``FlowLogic`` subclasses can have constructor parameters, which can be used as arguments to ``FlowLogic.call``
+* ``FlowLogic.call`` is annotated ``@Suspendable`` - this means that the flow will be check-pointed and serialised to
+  disk when it encounters a long-running operation, allowing your node to move on to running other flows. Forgetting
+  this annotation out will lead to some very weird error messages
+* There are also a few more annotations, on the ``FlowLogic`` subclasses themselves:
   * ``@InitiatingFlow`` means that this flow can be started directly by the node
-  * ``@InitiatedBy(Class)`` means that this flow can only start up in response to a message from another flow
   * ``StartableByRPC`` allows the node owner to start this flow via an RPC call
+  * ``@InitiatedBy(myClass: Class)`` means that this flow will only start in response to a message sent by another
+    node running the ``myClass`` flow
 
 Flow outline
 ------------
-Now that we've set up our ``FlowLogic`` subclasses, let's think about the steps we need to go through to issue a new
-IOU onto the ledger:
+Now that we've defined our ``FlowLogic`` subclasses, what are the steps we need to take to issue a new IOU onto
+the ledger?
 
-* On the initiator side, we need to:
-  1. Create a valid transaction proposing the creation of a new IOU
+On the initiator side, we need to:
+  1. Create a valid transaction proposal for the creation of a new IOU
   2. Sign the transaction ourselves
   3. Gather the acceptor's signature
   4. Get the transaction notarised, to protect against double-spends
   5. Record the notarised transaction in our vault
-  6. Send the notarised transaction to the acceptor so that they can approve it too
+  6. Send the notarised transaction to the acceptor so that they can record it too
 
-* On the acceptor side, we need to:
+On the acceptor side, we need to:
   1. Receive the partially-signed transaction from the initiator
   2. Verify its contents and signatures
-  3. Append our signatures and send it back to the initiator
+  3. Append our signature and send it back to the initiator
   4. Wait to receive back the notarised transaction from the initiator
-  5. Record the transaction in our vault
+  5. Record the notarised transaction in our vault
 
 Subflows
 ^^^^^^^^
-This looks like a lot of work. However, we can actually automate a lot of these steps by invoking existing flows as
-*subflows* to automate many of these tasks. Step 3 on the initiator's side can be automated by
-``SignTransactionFlow``, while steps 4, 5 and 6 can be automated by ``FinalityFlow``.
+Although our flows look complex, we can delegate to existing flows to handle many of these tasks. A flow that is
+invoked within the context of a larger flow to handle a repeatable task is called a *subflow*.
 
-Meanwhile, the *entirety* of the acceptor's flow can be automated through a combination of ``CollectSignaturesFlow``
-and ``FinalityFlow``.
+In our initiator flow, we can automate step 3 by invoking ``SignTransactionFlow``, and we can automate steps 4, 5 and
+6 using ``FinalityFlow``. Meanwhile, the *entirety* of the acceptor's flow can be automated using
+``CollectSignaturesFlow``.
 
-All we have to handle is the creation and signing of a valid transaction on the initiator side.
+All we need to do is write the steps to handle the initiator creating and signing the proposed transaction.
 
-Writing the flow
-----------------
-We can break the flow down into five steps:
-* Building the transaction
-* Verifying the transaction
-* Signing the transaction
-* Gathering the counterparty's signature
-* Finalising the transaction
+Writing the initiator's flow
+----------------------------
+Let's work through the steps of the initiator's flow one-by-one.
 
 Building the transaction
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -144,6 +144,9 @@ We'll approach building the transaction in three steps:
 
 TransactionBuilder
 ~~~~~~~~~~~~~~~~~~
+To start building the proposed transaction, we need a ``TransactionBuilder``. This is a mutable transaction class to
+which we can add inputs, outputs, commands, and any other components the transaction needs.
+
 We create a ``TransactionBuilder`` in ``Initiator.call`` as follows:
 
 .. container:: codeset
@@ -169,20 +172,21 @@ We create a ``TransactionBuilder`` in ``Initiator.call`` as follows:
             txBuilder.setNotary(notary);
         }
 
-In the first line, we create a ``TransactionBuilder``. This is a mutable transaction class that we can use to build
-up our proposed transaction.
+In the first line, we create a ``TransactionBuilder``. We will also want our transaction to have a notary, in order
+to prevent double-spends. In the second line, we retrieve the identity of the notary who will be notarising our
+transaction and add it to the builder.
 
-We then retrieve the identity of the notary who will be notarising our transaction and add it to the builder. Whenever
-we need information about our node, its contents or the rest of the network within a flow, we use the node's
-``ServiceHub``. ``ServiceHub.networkMapCache`` in particular provides information about the other nodes on the
-network and the services they offer.
+You can see that the notary's identity is being retrieved from the node's ``ServiceHub``. Whenever we need
+information within a flow - whether it's about our own node, its contents, or the rest of the network - we use the
+node's ``ServiceHub``. ``ServiceHub.networkMapCache`` in particular provides information about the other nodes on the
+network and the services that they offer.
 
 Transaction components
 ~~~~~~~~~~~~~~~~~~~~~~
-We now need to create the components of our transaction:
+Now that we have our ``TransactionBuilder``, we need to create its components:
 
-* The output state
-* The ``Create`` command, with the sender and recipient as signers
+* The output ``IOUState``
+* A ``Create`` command listing both the IOU's sender and recipient as signers
 
 We create these components as follows:
 
@@ -220,13 +224,17 @@ We create these components as follows:
             final Command txCommand = new Command(new IOUContract.Create(), signers);
         }
 
-We start by retrieving our own identity, which we'll need this to build the state. As before, we get this information
-from the ``ServiceHub`` - from ``ServiceHub.myInfo``, in this case. We then build the ``IOUState``, using our
-identity and the ``FlowLogic``'s constructor parameters.
+To build the state, we start by retrieving our own identity (again, we get this information from the ``ServiceHub``,
+via ``ServiceHub.myInfo``). We then build the ``IOUState``, using our identity, the ``IOUContract``, and the IOU
+value and counterparty from the ``FlowLogic``'s constructor parameters.
+
+We also create the command, which pairs the ``IOUContract.Create`` command with the public keys of ourselves and the
+counterparty. If this command is included in the transaction, both ourselves and the counterparty will be required
+signers.
 
 Adding the components
 ~~~~~~~~~~~~~~~~~~~~~
-We now add the items to the transaction using the ``TransactionBuilder.withItems`` method:
+Finally, we add the items to the transaction using the ``TransactionBuilder.withItems`` method:
 
 .. container:: codeset
 
@@ -274,10 +282,12 @@ We now add the items to the transaction using the ``TransactionBuilder.withItems
   state references
 * `Command` objects, which are added to the builder as commands
 
+It will modify the ``TransactionBuilder`` in-place to add these components to it.
+
 Verifying the transaction
 ^^^^^^^^^^^^^^^^^^^^^^^^^
-We've now built our proposed transaction. Before we sign it, we should check that the proposed ledger update is
-valid, by running the transaction's contracts:
+We've now built our proposed transaction. Before we sign it, we should check that it represents a valid ledger update
+proposal by verifying the transaction, which will execute each of the transaction's contracts:
 
 .. container:: codeset
 
@@ -328,17 +338,19 @@ valid, by running the transaction's contracts:
 To verify the transaction, we must:
 * Convert the builder into an immutable ``WireTransaction``
 * Convert the ``WireTransaction`` into a ``LedgerTransaction`` using the ``ServiceHub``. This step resolves the
-  transaction's input state references and attachment references into actual states and attachments, in case
-  they are needed to verify the transaction
+  transaction's input state references and attachment references into actual states and attachments (in case their
+  contents are needed to verify the transaction
 * Call ``LedgerTransaction.verify`` to test whether the transaction is valid based on the contract of every input and
   output state in the transaction
 
-If the verify step fails, a ``TransactionVerificationException`` will be throw, ending the flow
+If the verification fails, we have built an invalid transaction. Our flow will then end, throwing a
+``TransactionVerificationException``.
 
 Signing the transaction
 ^^^^^^^^^^^^^^^^^^^^^^^
-Now that we are satisfied that the transaction we've built is valid, we sign it to prevent any further changes being
-made:
+Now that we are satisfied that our transaction proposal is valid, we sign it. Once the transaction is signed,
+no-one will be able to modify the transaction without invalidating our signature. This effectively makes the
+transaction immutable.
 
 .. container:: codeset
 
@@ -392,8 +404,8 @@ made:
             final SignedTransaction partSignedTx = getServiceHub().signInitialTransaction(txBuilder);
         }
 
-``ServiceHub.signInitialTransaction`` returns a ``SignedTransaction`` - an object that pairs the contents of a
-transaction with a list of signatures over the transaction.
+The call to ``ServiceHub.signInitialTransaction`` returns a ``SignedTransaction`` - an object that pairs the
+transaction itself with a list of signatures over that transaction.
 
 We can now safely send the builder to our counterparty. If the counterparty tries to modify the transaction, the
 transaction's hash will change, our digital signature will no longer be valid, and the transaction will not be accepted
@@ -401,8 +413,8 @@ as a valid ledger update.
 
 Gathering counterparty signatures
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The next step is to collect the signature from the counterparty. As discussed above, we'll automate this process by
-invoking the built-in ``CollectSignaturesFlow``:
+The final step in order to create a valid transaction proposal is to collect the counterparty's signature. As
+discussed, we can automate this process by invoking the built-in ``CollectSignaturesFlow``:
 
 .. container:: codeset
 
@@ -463,75 +475,14 @@ invoking the built-in ``CollectSignaturesFlow``:
                     new CollectSignaturesFlow(partSignedTx, CollectSignaturesFlow.Companion.tracker()));
         }
 
-``CollectSignaturesFlow`` gathers signatures from every participant, and returns a ``SignedTransaction`` with all the
- required signatures.
-
-SignTransactionFlow
-~~~~~~~~~~~~~~~~~~~
-By default, every node is registered to respond to a message from ``CollectSignaturesFlow`` by invoking
-``SignTransactionFlow``. ``SignTransactionFlow`` is an abstract class, and we have to subclass it in the responder
-side of the flow and override ``SignTransactionFlow.checkTransaction``:
-
-.. container:: codeset
-
-    .. code-block:: kotlin
-
-        @InitiatedBy(Initiator::class)
-        class Acceptor(val otherParty: Party) : FlowLogic<Unit>() {
-
-            @Suspendable
-            override fun call() {
-                // Stage 1 - Verifying and signing the transaction.
-                subFlow(object : SignTransactionFlow(otherParty, tracker()) {
-                    override fun checkTransaction(stx: SignedTransaction) {
-                        // Define custom verification logic here.
-                    }
-                })
-            }
-        }
-
-    .. code-block:: java
-
-        @InitiatedBy(Initiator.class)
-        public static class Acceptor extends FlowLogic<Void> {
-
-            private final Party otherParty;
-
-            public Acceptor(Party otherParty) {
-                this.otherParty = otherParty;
-            }
-
-            @Suspendable
-            @Override
-            public Void call() throws FlowException {
-                // Stage 1 - Verifying and signing the transaction.
-
-                class signTxFlow extends SignTransactionFlow {
-                    private signTxFlow(Party otherParty, ProgressTracker progressTracker) {
-                        super(otherParty, progressTracker);
-                    }
-
-                    @Override
-                    protected void checkTransaction(SignedTransaction signedTransaction) {
-                        // Define custom verification logic here.
-                    }
-                }
-
-                subFlow(new signTxFlow(otherParty, SignTransactionFlow.Companion.tracker()));
-
-                return null;
-            }
-        }
-
-``SignTransactionFlow`` already checks the transaction's signatures, and whether the transaction is contractually
-valid. In ``SignTransactionFlow.checkTransaction``, we define any additional verification of the transaction that we
-wish to perform before we sign it. For example, we may wish to check that the value of the IOU is not too high.
+``CollectSignaturesFlow`` gathers signatures from every participant listed on the transaction, and returns a
+``SignedTransaction`` with all the required signatures.
 
 Finalising the transaction
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
-We now have a valid transaction signed by all the required parties. We now need to have it notarised and recorded by
-all the relevant parties for it to become part of the ledger. Again, we'll do this by invoking the built-in
-``FinalityFlow``:
+We now have a valid transaction signed by all the required parties. All that's left to do is to have it notarised and
+recorded by all the relevant parties. From then on, it will become a permanent part of the ledger. Again, instead
+of handling this process manually, we'll use a built-in flow called ``FinalityFlow``:
 
 .. container:: codeset
 
@@ -598,21 +549,100 @@ all the relevant parties for it to become part of the ledger. Again, we'll do th
             return subFlow(new FinalityFlow(signedTx)).get(0);
         }
 
-``FinalityFlow`` will completely automate the process of:
+``FinalityFlow`` completely automates the process of:
 * Notarising the transaction
 * Recording it in our vault
 * Sending it to the counterparty for them to record as well
 
-Once ``FinalityFlow`` completes, we will have a valid new IOU recorded on the ledger.
+That completes the initiator side of the flow.
+
+Writing the acceptor's flow
+---------------------------
+The acceptor's side of the flow is much simpler. We need to:
+1. Receive a signed transaction from the counterparty
+2. Verify the transaction
+3. Sign the transaction
+4. Send the updated transaction back to the counterparty
+
+As we just saw, the process of building and finalising the transaction will be completely handled by the initiator flow.
+
+SignTransactionFlow
+~~~~~~~~~~~~~~~~~~~
+We can automate all four steps of the acceptor's flow by invoking ``SignTransactionFlow``. ``SignTransactionFlow`` is
+a flow that is registered by default on every node to respond to messages from ``CollectSignaturesFlow`` (which is
+invoked by the initiator flow).
+
+``SignTransactionFlow`` is an abstract class. We have to subclass it and override
+``SignTransactionFlow.checkTransaction``:
+
+.. container:: codeset
+
+    .. code-block:: kotlin
+
+        @InitiatedBy(Initiator::class)
+        class Acceptor(val otherParty: Party) : FlowLogic<Unit>() {
+
+            @Suspendable
+            override fun call() {
+                // Stage 1 - Verifying and signing the transaction.
+                subFlow(object : SignTransactionFlow(otherParty, tracker()) {
+                    override fun checkTransaction(stx: SignedTransaction) {
+                        // Define custom verification logic here.
+                    }
+                })
+            }
+        }
+
+    .. code-block:: java
+
+        @InitiatedBy(Initiator.class)
+        public static class Acceptor extends FlowLogic<Void> {
+
+            private final Party otherParty;
+
+            public Acceptor(Party otherParty) {
+                this.otherParty = otherParty;
+            }
+
+            @Suspendable
+            @Override
+            public Void call() throws FlowException {
+                // Stage 1 - Verifying and signing the transaction.
+
+                class signTxFlow extends SignTransactionFlow {
+                    private signTxFlow(Party otherParty, ProgressTracker progressTracker) {
+                        super(otherParty, progressTracker);
+                    }
+
+                    @Override
+                    protected void checkTransaction(SignedTransaction signedTransaction) {
+                        // Define custom verification logic here.
+                    }
+                }
+
+                subFlow(new signTxFlow(otherParty, SignTransactionFlow.Companion.tracker()));
+
+                return null;
+            }
+        }
+
+``SignTransactionFlow`` already checks the transaction's signatures, and whether the transaction is contractually
+valid. The purpose of ``SignTransactionFlow.checkTransaction`` is to define any additional verification of the
+transaction that we wish to perform before we sign it. For example, we may not wish to sign an IOU if its value is
+too high.
+
+
+// TODO: Talk about flow tests
+
 
 Progress so far
 ---------------
-We now have a flow that we can invoke at will to automate the process of issuing an IOU onto the ledger. Under the
-hood, this flow takes the form of two communicating ``FlowLogic`` subclasses.
+We now have a flow that we can kick off on our node to completely automate the process of issuing an IOU onto the
+ledger. Under the hood, this flow takes the form of two communicating ``FlowLogic`` subclasses.
 
 We now have a complete CorDapp, made up of:
-* The ``IOUState``, representing our IOUs on ledger
+* The ``IOUState``, representing IOUs on the ledger
 * The ``IOUContract``, controlling the evolution of ``IOUState`` objects over time
-* The ``IOUFlow``, allowing us to orchestrate the agreement of a new IOU
+* The ``IOUFlow``, which transforms the creation of a new IOU on the ledger into a push-button process
 
 The final step is to spin up some nodes and test our CorDapp.
