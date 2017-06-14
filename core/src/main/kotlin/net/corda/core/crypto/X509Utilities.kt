@@ -10,7 +10,6 @@ import org.bouncycastle.cert.X509CertificateHolder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter
 import org.bouncycastle.util.io.pem.PemReader
-import java.io.ByteArrayInputStream
 import java.io.FileReader
 import java.io.FileWriter
 import java.io.InputStream
@@ -24,6 +23,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.*
+import javax.security.auth.x500.X500Principal
+
 
 object X509Utilities {
     val DEFAULT_IDENTITY_SIGNATURE_SCHEME = Crypto.EDDSA_ED25519_SHA512
@@ -134,14 +135,23 @@ object X509Utilities {
      * directly from the target to the root.
      *
      * @param trustedRoot trusted root certificate that will be the start of the path.
+     * @param caCertStore certificate store for certificate authority and intermediary certificates.
      * @param certificates certificates in the path.
      * @param revocationEnabled whether revocation of certificates in the path should be checked.
      */
-    fun createCertificatePath(trustedRoot: X509CertificateHolder, vararg certificates: X509CertificateHolder, revocationEnabled: Boolean): CertPath {
-        val certFactory = CertificateFactory.getInstance("X509")
-        val params = PKIXParameters(setOf(TrustAnchor(trustedRoot.cert, null)))
-        params.isRevocationEnabled = revocationEnabled
-        return certFactory.generateCertPath(certificates.map { certFactory.generateCertificate(ByteArrayInputStream(it.encoded)) }.toList())
+    fun createCertificatePath(rootCert: X509Certificate, caCertStore: CertStore, target: X509Certificate, revocationEnabled: Boolean): CertPath {
+        val trustRoot = TrustAnchor(rootCert, null)
+        val certSelector = X509CertSelector().apply {
+            certificate = target
+        }
+        val certPathBuilder = CertPathBuilder.getInstance("PKIX")
+        val certStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(setOf(target)))
+        val params = PKIXBuilderParameters(setOf(trustRoot), certSelector).apply {
+            addCertStore(caCertStore)
+            addCertStore(certStore)
+            setRevocationEnabled(false)
+        }
+        return certPathBuilder.build(params).certPath
     }
 
     fun validateCertificateChain(trustedRoot: X509CertificateHolder, vararg certificates: Certificate) {

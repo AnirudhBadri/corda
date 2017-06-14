@@ -6,7 +6,6 @@ package net.corda.testing
 import com.google.common.net.HostAndPort
 import net.corda.core.contracts.StateRef
 import net.corda.core.crypto.*
-import net.corda.core.identity.AnonymousParty
 import net.corda.core.identity.Party
 import net.corda.core.identity.PartyAndCertificate
 import net.corda.core.node.ServiceHub
@@ -30,7 +29,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyPair
 import java.security.PublicKey
-import java.security.cert.CertPath
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 

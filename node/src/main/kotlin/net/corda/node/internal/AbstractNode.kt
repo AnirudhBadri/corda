@@ -71,6 +71,8 @@ import java.nio.file.Paths
 import java.security.KeyPair
 import java.security.KeyStore
 import java.security.KeyStoreException
+import java.security.cert.CertStore
+import java.security.cert.CollectionCertStoreParameters
 import java.security.cert.X509Certificate
 import java.time.Clock
 import java.util.*
@@ -688,7 +690,11 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
     protected abstract fun makeUniquenessProvider(type: ServiceType): UniquenessProvider
 
     protected open fun makeIdentityService(trustRoot: X509Certificate, clientCa: CertificateAndKeyPair?): IdentityService {
-        val service = InMemoryIdentityService(setOf(info.legalIdentityAndCert), trustRootParsed = trustRoot, clientCaCert = clientCa?.certificate)
+        val service = if (clientCa != null) {
+            InMemoryIdentityService(setOf(info.legalIdentityAndCert), trustRoot = trustRoot, caCertificates = clientCa.certificate.cert)
+        } else {
+            InMemoryIdentityService(setOf(info.legalIdentityAndCert), trustRoot = trustRoot)
+        }
         services.networkMapCache.partyNodes.forEach { service.registerIdentity(it.legalIdentityAndCert) }
         netMapCache.changed.subscribe { mapChange ->
             // TODO how should we handle network map removal
@@ -758,15 +764,17 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
         val pubIdentityFile = configuration.baseDirectory / "$serviceId-public"
         val certificateAndKeyPair = keyStore.certificateAndKeyPair(privateKeyAlias)
         val identityCertPathAndKey: Pair<PartyAndCertificate, KeyPair> = if (certificateAndKeyPair != null) {
-            val (cert, keyPair) = certificateAndKeyPair
+            val (certHolder, keyPair) = certificateAndKeyPair
+            val cert = certHolder.cert
             // Get keys from keystore.
-            val loadedServiceName = X509CertificateHolder(cert.encoded).subject
+            val loadedServiceName = X509CertificateHolder(certHolder.encoded).subject
             if (loadedServiceName != serviceName) {
                 throw ConfigurationException("The legal name in the config file doesn't match the stored identity keystore:" +
                         "$serviceName vs $loadedServiceName")
             }
-            val certPath = X509Utilities.createCertificatePath(cert, cert, revocationEnabled = false)
-            Pair(PartyAndCertificate(loadedServiceName, keyPair.public, cert, certPath), keyPair)
+            val caCertStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(setOf(cert)))
+            val certPath = X509Utilities.createCertificatePath(cert, caCertStore, cert, revocationEnabled = false)
+            Pair(PartyAndCertificate(loadedServiceName, keyPair.public, certHolder, certPath), keyPair)
         } else if (privKeyFile.exists()) {
             // Get keys from key file.
             // TODO: this is here to smooth out the key storage transition, remove this in future release.
@@ -789,11 +797,13 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
             // Create new keys and store in keystore.
             log.info("Identity key not found, generating fresh key!")
             val keyPair: KeyPair = generateKeyPair()
-            val cert = X509Utilities.createCertificate(CertificateType.IDENTITY, clientCA.certificate, clientCA.keyPair, serviceName, keyPair.public)
-            val certPath = X509Utilities.createCertificatePath(rootCA.certificate, cert, revocationEnabled = false)
+            val certHolder = X509Utilities.createCertificate(CertificateType.IDENTITY, clientCA.certificate, clientCA.keyPair, serviceName, keyPair.public)
+            val cert = certHolder.cert
+            val caCertStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(setOf(rootCA.certificate.cert, cert)))
+            val certPath = X509Utilities.createCertificatePath(rootCA.certificate.cert, caCertStore, cert, revocationEnabled = false)
             keyStore.save(serviceName, privateKeyAlias, keyPair)
             require(certPath.certificates.isNotEmpty()) { "Certificate path cannot be empty" }
-            Pair(PartyAndCertificate(serviceName, keyPair.public, cert, certPath), keyPair)
+            Pair(PartyAndCertificate(serviceName, keyPair.public, certHolder, certPath), keyPair)
         }
         partyKeys += identityCertPathAndKey.second
         return identityCertPathAndKey

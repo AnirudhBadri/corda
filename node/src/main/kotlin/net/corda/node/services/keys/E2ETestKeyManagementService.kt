@@ -58,11 +58,7 @@ class E2ETestKeyManagementService(val identityService: IdentityService,
     }
 
     override fun freshKeyAndCert(identity: PartyAndCertificate, revocationEnabled: Boolean): Pair<X509CertificateHolder, CertPath> {
-        val clientCa = identityService.clientCaCert
-        return if (clientCa != null)
-            freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity, clientCa)
-        else
-            freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity)
+        return freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity)
     }
 
     private fun getSigner(publicKey: PublicKey): ContentSigner = getSigner(getSigningKeyPair(publicKey))

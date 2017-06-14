@@ -6,6 +6,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import net.corda.core.*
 import net.corda.core.crypto.CertificateAndKeyPair
+import net.corda.core.crypto.cert
 import net.corda.core.crypto.entropyToKeyPair
 import net.corda.core.identity.PartyAndCertificate
 import net.corda.core.messaging.MessageRecipients
@@ -168,9 +169,12 @@ class MockNetwork(private val networkSendManuallyPumped: Boolean = false,
         }
 
         override fun makeIdentityService(trustRoot: X509Certificate, clientCa: CertificateAndKeyPair?): IdentityService {
-            return InMemoryIdentityService((mockNet.identities + info.legalIdentityAndCert).toSet(),
-                    trustRootParsed = trustRoot,
-                    clientCaCert = clientCa?.certificate)
+            return if (clientCa != null)
+                InMemoryIdentityService((mockNet.identities + info.legalIdentityAndCert).toSet(),
+                    trustRoot = trustRoot, caCertificates = clientCa.certificate.cert)
+            else
+                InMemoryIdentityService((mockNet.identities + info.legalIdentityAndCert).toSet(),
+                        trustRoot = trustRoot)
         }
 
         override fun makeVaultService(dataSourceProperties: Properties): VaultService = NodeVaultService(services, dataSourceProperties)

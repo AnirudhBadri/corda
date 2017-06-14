@@ -30,21 +30,27 @@ import kotlin.collections.ArrayList
  * @param certPaths initial set of certificate paths for the service, typically only used for unit tests.
  */
 @ThreadSafe
-class InMemoryIdentityService(identities: Iterable<PartyAndCertificate>,
+class InMemoryIdentityService(identities: Iterable<PartyAndCertificate> = emptySet(),
                               certPaths: Map<AnonymousParty, CertPath> = emptyMap(),
-                              val trustRootParsed: X509Certificate,
-                              override val clientCaCert: X509CertificateHolder? = null) : SingletonSerializeAsToken(), IdentityService {
+                              override val trustRoot: X509Certificate,
+                              vararg caCertificates: X509Certificate) : SingletonSerializeAsToken(), IdentityService {
     companion object {
         private val log = loggerFor<InMemoryIdentityService>()
     }
 
-    override val trustRoot = X509CertificateHolder(trustRootParsed.encoded)
-    private val trustAnchor: TrustAnchor? = trustRootParsed.let { cert -> TrustAnchor(cert, null) }
+    /**
+     * Certificate store for certificate authority and intermediary certificates.
+     */
+    override val caCertStore: CertStore
+    override val trustRootHolder = X509CertificateHolder(trustRoot.encoded)
+    private val trustAnchor: TrustAnchor? = TrustAnchor(trustRoot, null)
     private val keyToParties = ConcurrentHashMap<PublicKey, PartyAndCertificate>()
     private val principalToParties = ConcurrentHashMap<X500Name, PartyAndCertificate>()
     private val partyToPath = ConcurrentHashMap<AbstractParty, CertPath>()
 
     init {
+        val caCertificates: Set<X509Certificate> = caCertificates.toSet() + trustRoot
+        caCertStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(caCertificates))
         keyToParties.putAll(identities.associateBy { it.owningKey } )
         principalToParties.putAll(identities.associateBy { it.name })
         partyToPath.putAll(certPaths)

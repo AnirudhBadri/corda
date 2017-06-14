@@ -69,7 +69,7 @@ open class MockServices(vararg val keys: KeyPair) : ServiceHub {
     }
 
     override val storageService: TxWritableStorageService = MockStorageService()
-    override final val identityService: IdentityService = InMemoryIdentityService(MOCK_IDENTITIES, trustRootParsed = DUMMY_CA.certificate.cert)
+    override final val identityService: IdentityService = InMemoryIdentityService(MOCK_IDENTITIES, trustRoot = DUMMY_CA.certificate.cert)
     override val keyManagementService: KeyManagementService = MockKeyManagementService(identityService, *keys)
 
     override val vaultService: VaultService get() = throw UnsupportedOperationException()
@@ -103,11 +103,7 @@ class MockKeyManagementService(val identityService: IdentityService,
     }
 
     override fun freshKeyAndCert(identity: PartyAndCertificate, revocationEnabled: Boolean): Pair<X509CertificateHolder, CertPath> {
-        val clientCa = identityService.clientCaCert
-        return if (clientCa != null)
-            freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity, clientCa)
-        else
-            freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity)
+        return freshCertificate(identityService, freshKey(), getSigner(identity.owningKey), revocationEnabled, identity)
     }
 
     private fun getSigner(publicKey: PublicKey): ContentSigner = getSigner(getSigningKeyPair(publicKey))

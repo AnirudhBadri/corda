@@ -17,6 +17,8 @@ import org.slf4j.LoggerFactory
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.security.cert.CertPath
+import java.security.cert.CertStore
+import java.security.cert.CollectionCertStoreParameters
 import java.security.cert.X509Certificate
 import java.time.Instant
 import java.util.*
@@ -155,7 +157,8 @@ class KryoTests {
         val rootCAKey = Crypto.generateKeyPair(X509Utilities.DEFAULT_TLS_SIGNATURE_SCHEME)
         val rootCACert = X509Utilities.createSelfSignedCACertificate(ALICE.name, rootCAKey)
         val certificate = X509Utilities.createCertificate(CertificateType.TLS, rootCACert, rootCAKey, BOB.name, BOB_PUBKEY)
-        val expected = X509Utilities.createCertificatePath(rootCACert, certificate, revocationEnabled = false)
+        val certStore = CertStore.getInstance("Collection", CollectionCertStoreParameters(setOf(certificate.cert)))
+        val expected = X509Utilities.createCertificatePath(rootCACert.cert, certStore, certificate.cert, revocationEnabled = false)
         val serialized = expected.serialize(kryo).bytes
         val actual: CertPath = serialized.deserialize(kryo)
         assertEquals(expected, actual)
